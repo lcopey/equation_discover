@@ -1,11 +1,13 @@
+from functools import wraps
+
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
 from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Dense
 from tensorflow.keras.losses import MeanSquaredError
+from tensorflow.keras.models import Sequential
 from tensorflow.keras.optimizers import Adam
-from functools import wraps
+
 from .sample import Uniform
 from .utils import cast_to_list, get_numpy_array, rmse
 
@@ -27,7 +29,9 @@ class ProxyModel(Sequential):
 
     @wraps(Sequential.fit)
     def fit(self, X: np.ndarray, y: np.ndarray, *args, **kwargs):
-        stop_early = EarlyStopping(monitor='val_loss', patience=50, start_from_epoch=500)
+        stop_early = EarlyStopping(
+            monitor="val_loss", patience=50, start_from_epoch=500
+        )
         super().fit(X, y, *args, callbacks=[stop_early], **kwargs)
 
     @wraps(Sequential.predict)

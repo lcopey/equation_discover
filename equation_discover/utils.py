@@ -1,7 +1,7 @@
 from typing import Any
-import tensorflow as tf
 
 import numpy as np
+import tensorflow as tf
 
 
 def cast_to_list(value: Any | list[Any], n: int = 1):
@@ -22,4 +22,4 @@ def rmse(y_true: np.ndarray, y_pred: np.ndarray | None = None):
     if y_pred is not None:
         return np.sqrt(np.sum((y_true - y_pred.flatten()) ** 2) / n)
     else:
-        return np.sqrt(np.sum(y_true ** 2) / n)
+        return np.sqrt(np.sum(y_true**2) / n)
