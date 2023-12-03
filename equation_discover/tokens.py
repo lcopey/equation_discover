@@ -28,14 +28,6 @@ class TokenSequence(list[Token]):
             return super().__getitem__(item)
 
     @property
-    def zero_arity_mask(self):
-        return tf.constant([token.arity == 0 for token in self])
-
-    @property
-    def nonzero_arity_mask(self):
-        return tf.constant([token.arity != 0 for token in self])
-
-    @property
     def nonvariable_mask(self):
         return tf.constant([not token.variable for token in self])
 
@@ -43,24 +35,69 @@ class TokenSequence(list[Token]):
     def variable_mask(self):
         return tf.constant([token.variable for token in self])
 
+    def i_arity_mask(self, i: int):
+        return tf.constant([token.arity == i for token in self])
+
+    def non_i_arity_mask(self, i: int):
+        return tf.constant([token.arity != i for token in self])
+
+    @property
+    def zero_arity_mask(self):
+        return self.i_arity_mask(0)
+
+    @property
+    def one_arity_mask(self):
+        return self.i_arity_mask(1)
+
+    @property
+    def two_arity_mask(self):
+        return self.i_arity_mask(2)
+
+    @property
+    def non_zero_arity_mask(self):
+        return self.non_i_arity_mask(0)
+
+    @property
+    def non_one_arity_mask(self):
+        return self.non_i_arity_mask(1)
+
+    @property
+    def non_two_arity_mask(self):
+        return self.non_i_arity_mask(2)
+
     @property
     def variable_tensor(self):
         return tf.constant([n for n, token in enumerate(self) if token.variable])
 
-    def arity_i_tensor(self, i: int):
+    def i_arity_tensor(self, i: int):
         return tf.constant([n for n, token in enumerate(self) if token.arity == i])
 
-    @property
-    def arity_zero_tensor(self):
-        return self.arity_i_tensor(0)
+    def non_i_arity_tensor(self, i: int):
+        return tf.constant([n for n, token in enumerate(self) if token.arity != i])
 
     @property
-    def arity_one_tensor(self):
-        return self.arity_i_tensor(1)
+    def zero_arity_tensor(self):
+        return self.i_arity_tensor(0)
 
     @property
-    def arity_two_tensor(self):
-        return self.arity_i_tensor(2)
+    def one_arity_tensor(self):
+        return self.i_arity_tensor(1)
+
+    @property
+    def two_arity_tensor(self):
+        return self.i_arity_tensor(2)
+
+    @property
+    def non_zero_arity_tensor(self):
+        return self.non_i_arity_tensor(0)
+
+    @property
+    def non_one_arity_tensor(self):
+        return self.non_i_arity_tensor(1)
+
+    @property
+    def non_two_arity_tensor(self):
+        return self.non_i_arity_tensor(2)
 
 
 BASE_TOKENS = TokenSequence(
