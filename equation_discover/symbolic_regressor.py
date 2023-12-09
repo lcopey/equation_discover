@@ -198,8 +198,6 @@ class EquationSampler(Model):
         # number of tokens currently in expressions
         lengths = tf.zeros(n, dtype=tf.int32)
 
-        # TODO while
-        # for _ in range(repeat):
         while tf.reduce_any(tf.reduce_all(sequence_mask, axis=1)):
             tokens, log_prob, entropy = self.sample_tokens(
                 input_tensor, hidden_tensor, counters, lengths, sequences

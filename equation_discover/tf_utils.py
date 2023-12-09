@@ -18,7 +18,11 @@ class TensorExpress:
         return self._tensor
 
     def __getattr__(self, name):
-        return getattr(self._tensor, name)
+        results = getattr(self._tensor, name)
+        if isinstance(results, tf.Tensor):
+            return TensorExpress(results)
+        else:
+            return results
 
     def astype(self, dtype):
         return TensorExpress(tf.cast(self._tensor, dtype=dtype))
