@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.keras.layers import Dense, Embedding, SimpleRNN, StringLookup
 from tensorflow.keras.models import Model
 
-from .tf_utils import tf_bitwise, tf_isin
+from .tf_utils import TensorExpress, tf_bitwise, tf_isin
 from .tokens import TokenSequence
 
 
@@ -183,7 +183,7 @@ class EquationSampler(Model):
         output = self.projection_layer(output)
         return output, state
 
-    def sample_sequence(self, n: int, repeat: int = 2):
+    def sample_sequence(self, n: int):
         shape = (n, 0)
         sequences = tf.zeros(shape, dtype=tf.int32)
         entropies = tf.zeros(shape, dtype=tf.float32)
@@ -196,6 +196,7 @@ class EquationSampler(Model):
         # number of tokens that must be sampled to complete expression
         counters = tf.ones(n, dtype=tf.int32)
         # number of tokens currently in expressions
+        # TODO is lengths useful ?
         lengths = tf.zeros(n, dtype=tf.int32)
 
         while tf.reduce_any(tf.reduce_all(sequence_mask, axis=1)):
@@ -231,6 +232,7 @@ class EquationSampler(Model):
             parent_sibling = self.get_parent_sibling(sequences, lengths)
             input_tensor = self.get_next_input(parent_sibling)
 
+        lengths = TensorExpress(sequence_mask).int().sum(axis=1)
         return sequences, entropies, log_probs, counters, lengths, sequence_mask
 
     def sample_tokens(self, input_tensor, hidden_tensor, counters, lengths, sequences):

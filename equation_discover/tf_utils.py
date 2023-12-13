@@ -24,6 +24,9 @@ class TensorExpress:
         else:
             return results
 
+    def __getitem__(self, item):
+        return self.tensor.__getitem__(item)
+
     def astype(self, dtype):
         return TensorExpress(tf.cast(self._tensor, dtype=dtype))
 
@@ -41,3 +44,6 @@ class TensorExpress:
 
     def any(self, axis=None):
         return TensorExpress(tf.reduce_any(self._tensor, axis=axis))
+
+    def sum(self, axis=None):
+        return TensorExpress(tf.reduce_sum(self._tensor, axis=axis))
