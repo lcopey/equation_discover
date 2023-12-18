@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from .tokens import Token
+from .tokens import BASE_TOKENS, Token, TokenSequence
 
 
 @dataclass
@@ -31,8 +31,28 @@ class Node:
         )
 
     @classmethod
-    def build_tree(cls, sequence):
-        pass
+    def build_tree(cls, sequence, tokens: TokenSequence = BASE_TOKENS):
+        value = sequence[0]
+        token = tokens[value]
+        root = cls.from_token(token, parent=None)
+
+        current_arity = root.arity
+        previous = root
+
+        for value in sequence[1:]:
+            current_arity -= 1
+            token = tokens[value]
+            child = Node.from_token(token)
+            current_arity += child.arity
+
+            previous.add_child(child)
+
+            previous = child
+            while not previous.is_complete():
+                previous = previous.parent
+                if previous is None:
+                    break
+        return root
 
     @property
     def is_final(self):
@@ -50,7 +70,7 @@ class Node:
     def child_count(self) -> int:
         return sum((self.left_child is not None, self.right_child is not None))
 
-    def remaining_children(self):
+    def is_complete(self):
         return self.child_count < self.arity
 
     def set_parent(self, parent: "Node"):
@@ -66,65 +86,93 @@ class Node:
             raise KeyError
 
     @staticmethod
-    def _child_tree_repr(node: Optional["Node"], level: int = 0):
-        tab = ("   " * level) + " |-"
-        return f"{tab}{node._recursive_tree_repr(level=level + 1)}" if node else None
-
-    def _recursive_tree_repr(self, level: int = 0):
-        left_repr = self._child_tree_repr(self.left_child, level=level)
-        right_repr = self._child_tree_repr(self.right_child, level=level)
-
-        return "\n".join(
-            filter(lambda x: x is not None, (self.symbol, left_repr, right_repr))
+    def recursive_repr(
+        node: "Node",
+        repr_func: Callable[["Node", str, str, int], str],
+        level: int = 0,
+    ):
+        left_repr = (
+            Node.recursive_repr(node.left_child, repr_func, level + 1)
+            if node.left_child
+            else None
+        )
+        right_repr = (
+            Node.recursive_repr(node.right_child, repr_func, level + 1)
+            if node.right_child
+            else None
         )
 
-    @staticmethod
-    def _child_expr_repr(node: Optional["Node"]):
-        return node._recursive_expr_repr() if node else None
-
-    def _recursive_expr_repr(self):
-        match self.arity:
-            case 2:
-                return f"{self._child_expr_repr(self.left_child)} {self.symbol} {self._child_expr_repr(self.right_child)}"
-            case 1:
-                return f"{self.symbol}({self._child_expr_repr(self.left_child)})"
-            case other:
-                return self.symbol
-
-    @staticmethod
-    def _child_html_repr(node: Optional["Node"], level: int = 0):
-        return f"{node._recursive_html_repr(level=level + 1)}" if node else None
-
-    def _recursive_html_repr(self, level: int = 0):
-        left_repr = self._child_html_repr(self.left_child, level=level)
-        right_repr = self._child_html_repr(self.right_child, level=level)
-        match self.arity:
-            case 2:
-                return (
-                    f"<li>"
-                    f"<details open>"
-                    f"<summary>{self.symbol}</summary>"
-                    f"\t<ul>{left_repr}</ul>"
-                    f"\t<ul>{right_repr}</ul>"
-                    f"</details>"
-                    f"</li>"
-                )
-            case 1:
-                return (
-                    f"<li>"
-                    f"<details open>"
-                    f"<summary>{self.symbol}</summary>"
-                    f"\t<ul>{left_repr}</ul>"
-                    f"</details>"
-                    f"</li>"
-                )
-            case other:
-                return f"<li>{self.symbol}</li>"
+        return repr_func(node, left_repr, right_repr, level)
 
     def __repr__(self):
-        # return self._recursive_tree_repr()
-        return self._recursive_expr_repr()
+        return self.recursive_repr(self, latex_repr, 0)
 
     def _repr_html_(self):
-        template = "<div>" f"\t{self._recursive_html_repr()}" "</div>"
+        template = "<div>" f"\t{self.recursive_repr(self, html_node_repr, 0)}" "</div>"
         return template
+
+    def _repr_latex_(self):
+        return f"$${self.recursive_repr(self, latex_repr, 0)}$$"
+
+
+def html_node_repr(node: "Node", left_repr, right_repr, level: int = 0):
+    match node.arity:
+        case 2:
+            return (
+                f"<li>"
+                f"<details open>"
+                f"<summary>{node.symbol}</summary>"
+                f"\t<ul>{left_repr}</ul>"
+                f"\t<ul>{right_repr}</ul>"
+                f"</details>"
+                f"</li>"
+            )
+        case 1:
+            return (
+                f"<li>"
+                f"<details open>"
+                f"<summary>{node.symbol}</summary>"
+                f"\t<ul>{left_repr}</ul>"
+                f"</details>"
+                f"</li>"
+            )
+        case other:
+            return f"<li>{node.symbol}</li>"
+
+
+def standard_node_repr(node: "Node", left_repr: str, right_repr: str, level: int = 0):
+    match node.arity:
+        case 2:
+            return f"{left_repr} {node.symbol} {right_repr}"
+        case 1:
+            return f"{node.symbol}({left_repr})"
+        case other:
+            return node.symbol
+
+
+def tree_node_repr(node: "Node", left_repr: str, right_repr: str, level: int = 0):
+    tab = "  " * level
+    match node.arity:
+        case 2:
+            return f"{node.symbol}\n" f"{tab}|-{left_repr}\n" f"{tab}|-{right_repr}"
+
+        case 1:
+            return f"{node.symbol}\n" f"{tab}|-{left_repr}\n"
+        case other:
+            return f"{node.symbol}"
+
+
+def latex_repr(node: "Node", left_repr: str, right_repr: str, level: int = 0):
+    match node.symbol:
+        case "/":
+            return f"\\frac{{{left_repr}}}{{{right_repr}}}"
+        case "exp":
+            return f"e^{{{left_repr}}}"
+        case other:
+            match node.arity:
+                case 2:
+                    return f"{left_repr}{node.symbol}{right_repr}"
+                case 1:
+                    return f"{node.symbol} ({left_repr})"
+                case other:
+                    return node.symbol
