@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Optional
 
 import tensorflow as tf
 
@@ -8,8 +8,8 @@ import tensorflow as tf
 class Token:
     symbol: str
     arity: float
-    tensorflow: Callable | None = None
-    sympy: Callable | None = None
+    tensorflow: Optional[Callable] = None
+    sympy: Optional[Callable] = None
     variable: bool = False
 
     def __repr__(self):
@@ -26,6 +26,10 @@ class TokenSequence(list[Token]):
             return self._dict_map[item]
         else:
             return super().__getitem__(item)
+
+    @property
+    def symbols(self):
+        return [token.symbol for token in self]
 
     @property
     def nonvariable_mask(self):
