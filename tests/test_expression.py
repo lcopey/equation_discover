@@ -30,18 +30,23 @@ class TestExpression(unittest.TestCase):
             BASE_TOKENS.symbols.index(value)
             for value in ["sin", "+", "*", "const", "var_x", "const"]
         ]
+        self.sequence_wo_const = [
+            BASE_TOKENS.symbols.index(value) for value in ["sin", "var_x"]
+        ]
         self.X = pd.DataFrame(np.linspace(-2 * np.pi, 2 * np.pi), columns=["var_x"])
         self.y = np.sin((self.X * 2 + 1).squeeze())
 
     def test_expression_eval(self):
-        tree = Node.from_sequence(sequence=self.sequence, tokens=BASE_TOKENS)
+        for sequence in [self.sequence_wo_const, self.sequence]:
+            tree = Node.from_sequence(sequence=sequence, tokens=BASE_TOKENS)
 
-        expression = Expression(tree)
-        results = expression.eval(self.X)
-        self.assertEqual(results.shape[0], self.X.shape[0])
+            expression = Expression(tree)
+            results = expression.eval(self.X)
+            self.assertEqual(results.shape[0], self.X.shape[0])
 
     def test_expression_fit(self):
-        tree = Node.from_sequence(sequence=self.sequence, tokens=BASE_TOKENS)
-        expression = Expression(tree)
-        expression.fit(self.X, self.y)
-        self.assertIsNotNone(expression.res_)
+        for sequence in [self.sequence_wo_const, self.sequence]:
+            tree = Node.from_sequence(sequence=sequence, tokens=BASE_TOKENS)
+            expression = Expression(tree)
+            expression.fit(self.X, self.y)
+            self.assertIsNotNone(expression.res_)

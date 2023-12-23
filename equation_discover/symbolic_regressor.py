@@ -4,6 +4,7 @@ import tensorflow as tf
 from tensorflow.keras.layers import Dense, Embedding, SimpleRNN, StringLookup
 from tensorflow.keras.models import Model
 
+from .constants import TF_FLOAT_DTYPE, TF_INT_DTYPE
 from .tf_utils import TensorExpress, tf_bitwise, tf_isin
 from .tokens import TokenSequence
 
@@ -32,13 +33,13 @@ class MinLengthConstraint(Constraint):
         # mask (n_samples, 1)
         min_boolean_mask = tf.cast(
             counters + lengths
-            >= tf.ones(counters.shape, dtype=tf.int32) * sampler.min_lengths,
-            dtype=tf.float32,
+            >= tf.ones(counters.shape, dtype=TF_INT_DTYPE) * sampler.min_lengths,
+            dtype=TF_FLOAT_DTYPE,
         )[:, None]
 
         # mask (n, n_operators)
         min_length_mask = tf.maximum(
-            tf.cast(sampler.tokens.non_zero_arity_mask, dtype=tf.float32)[None, :],
+            tf.cast(sampler.tokens.non_zero_arity_mask, dtype=TF_FLOAT_DTYPE)[None, :],
             min_boolean_mask,
         )
 
@@ -58,11 +59,12 @@ class MaxLengthConstraint(Constraint):
         sequences: tf.Tensor,
     ):
         max_length_mask = tf.cast(
-            counters + lengths <= tf.ones(counters.shape, dtype=tf.int32) * (12 - 2),
-            dtype=tf.float32,
+            counters + lengths
+            <= tf.ones(counters.shape, dtype=TF_INT_DTYPE) * (12 - 2),
+            dtype=TF_FLOAT_DTYPE,
         )[:, None]
         max_length_mask = tf.maximum(
-            tf.cast(sampler.tokens.zero_arity_mask, dtype=tf.float32)[None, :],
+            tf.cast(sampler.tokens.zero_arity_mask, dtype=TF_FLOAT_DTYPE)[None, :],
             max_length_mask,
         )
         output = tf.minimum(output, max_length_mask)
@@ -84,7 +86,7 @@ class MinVariableExpression(Constraint):
             ~tf.logical_and(
                 sampler.tokens.zero_arity_mask, sampler.tokens.nonvariable_mask
             ),
-            dtype=tf.float32,
+            dtype=TF_FLOAT_DTYPE,
         )
 
         if lengths[0] == 0:
@@ -103,14 +105,14 @@ class MinVariableExpression(Constraint):
                 tf_isin(
                     sequences,
                     sampler.tokens.variable_tensor
-                    # tf.cast(sampler.tokens.variable_tensor, dtype=tf.float32)
+                    # tf.cast(sampler.tokens.variable_tensor, dtype=TF_DTYPE)
                 ),
                 axis=1,
             )
 
             last_token_and_no_var_mask = tf.cast(
                 ~tf.logical_and(counter_mask, contains_novar_mask)[:, None],
-                dtype=tf.float32,
+                dtype=TF_FLOAT_DTYPE,
             )
 
             nonvar_zeroarity_mask = tf.maximum(
@@ -185,19 +187,19 @@ class EquationSampler(Model):
 
     def sample_sequence(self, n: int):
         shape = (n, 0)
-        sequences = tf.zeros(shape, dtype=tf.int32)
-        entropies = tf.zeros(shape, dtype=tf.float32)
-        log_probs = tf.zeros(shape, dtype=tf.float32)
+        sequences = tf.zeros(shape, dtype=TF_INT_DTYPE)
+        entropies = tf.zeros(shape, dtype=TF_FLOAT_DTYPE)
+        log_probs = tf.zeros(shape, dtype=TF_FLOAT_DTYPE)
 
         sequence_mask = tf.ones((n, 1), dtype=tf.bool)
         input_tensor = tf.tile(self.input_tensor, (n, 1))
         hidden_tensor = tf.tile(self.init_hidden, (n, 1))
 
         # number of tokens that must be sampled to complete expression
-        counters = tf.ones(n, dtype=tf.int32)
+        counters = tf.ones(n, dtype=TF_INT_DTYPE)
         # number of tokens currently in expressions
         # TODO is lengths useful ?
-        lengths = tf.zeros(n, dtype=tf.int32)
+        lengths = tf.zeros(n, dtype=TF_INT_DTYPE)
 
         while tf.reduce_any(tf.reduce_all(sequence_mask, axis=1)):
             tokens, log_prob, entropy = self.sample_tokens(
@@ -205,11 +207,13 @@ class EquationSampler(Model):
             )
             counters -= 1
             counters += (
-                tf.cast(tf_isin(tokens, self.tokens.two_arity_tensor), dtype=tf.int32)
+                tf.cast(
+                    tf_isin(tokens, self.tokens.two_arity_tensor), dtype=TF_INT_DTYPE
+                )
                 * 2
             )
             counters += tf.cast(
-                tf_isin(tokens, self.tokens.one_arity_tensor), dtype=tf.int32
+                tf_isin(tokens, self.tokens.one_arity_tensor), dtype=TF_INT_DTYPE
             )
 
             lengths += 1
@@ -247,7 +251,9 @@ class EquationSampler(Model):
         token_log_probabilities = tf.math.log(token_probabilities)
 
         # sample categories and squeeze the resulting tensor
-        tokens = tf.random.categorical(token_log_probabilities, 1, dtype=tf.int32)[:, 0]
+        tokens = tf.random.categorical(token_log_probabilities, 1, dtype=TF_INT_DTYPE)[
+            :, 0
+        ]
         indices = tf.concat(
             (tf.range(0, tokens.shape[0])[:, None], tokens[:, None]), axis=1
         )
@@ -283,7 +289,7 @@ class EquationSampler(Model):
         return output
 
     def get_parent_sibling(self, sequences, lengths):
-        parent_sibling = tf.ones((lengths.shape[0], 2), dtype=tf.int32) * -1
+        parent_sibling = tf.ones((lengths.shape[0], 2), dtype=TF_INT_DTYPE) * -1
 
         c = tf.zeros(lengths.shape[0])
 
@@ -294,12 +300,12 @@ class EquationSampler(Model):
             arity = tf.zeros(lengths.shape[0])
             arity += (
                 tf.cast(
-                    tf_isin(token_i, self.tokens.two_arity_tensor), dtype=tf.float32
+                    tf_isin(token_i, self.tokens.two_arity_tensor), dtype=TF_FLOAT_DTYPE
                 )
                 * 2
             )
             arity += tf.cast(
-                tf_isin(token_i, self.tokens.one_arity_tensor), dtype=tf.float32
+                tf_isin(token_i, self.tokens.one_arity_tensor), dtype=TF_FLOAT_DTYPE
             )
 
             # Increment c by arity of the i-th toke minus 1
@@ -316,26 +322,28 @@ class EquationSampler(Model):
             if i == recent:
                 i_ip1 = tf.pad(i_ip1, tf.constant([[0, 0], [0, 1]]), constant_values=-1)
             # wet i_ip1 to 0 when c_mask is False
-            i_ip1 = i_ip1 * tf.cast(c_mask, dtype=tf.int32)
-            parent_sibling = parent_sibling * tf.cast(~c_mask, dtype=tf.int32)
+            i_ip1 = i_ip1 * tf.cast(c_mask, dtype=TF_INT_DTYPE)
+            parent_sibling = parent_sibling * tf.cast(~c_mask, dtype=TF_INT_DTYPE)
             parent_sibling = parent_sibling + i_ip1
 
         # True for most recent token is non-zero arity False otherwise
         recent_non_zero_mask = ~tf_isin(
             sequences[:, recent], self.tokens.zero_arity_tensor
         )[:, None]
-        parent_sibling = parent_sibling * tf.cast(~recent_non_zero_mask, dtype=tf.int32)
+        parent_sibling = parent_sibling * tf.cast(
+            ~recent_non_zero_mask, dtype=TF_INT_DTYPE
+        )
 
         recent_parent_sibling = tf.concat(
             [
                 sequences[:, recent, None],
-                -1 * tf.ones((lengths.shape[0], 1), dtype=tf.int32),
+                -1 * tf.ones((lengths.shape[0], 1), dtype=TF_INT_DTYPE),
             ],
             axis=1,
         )
 
         recent_parent_sibling = recent_parent_sibling * tf.cast(
-            recent_non_zero_mask, dtype=tf.int32
+            recent_non_zero_mask, dtype=TF_INT_DTYPE
         )
 
         parent_sibling = parent_sibling + recent_parent_sibling

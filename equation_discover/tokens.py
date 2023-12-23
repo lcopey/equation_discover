@@ -3,6 +3,8 @@ from typing import Callable, Optional
 
 import tensorflow as tf
 
+from .functions import protected_div, protected_log
+
 
 @dataclass
 class Token:
@@ -107,7 +109,7 @@ class TokenSequence(list[Token]):
 BASE_TOKENS = TokenSequence(
     *[
         Token(char, 2, func)
-        for char, func in zip("+-*/", (tf.add, tf.subtract, tf.multiply, tf.divide))
+        for char, func in zip("+-*/", (tf.add, tf.subtract, tf.multiply, protected_div))
     ]
 )
 
@@ -115,7 +117,7 @@ BASE_TOKENS.extend(
     [
         Token(symbol, 1, func)
         for symbol, func in zip(
-            ("sin", "cos", "exp", "log"), (tf.sin, tf.cos, tf.exp, tf.math.log)
+            ("sin", "cos", "exp", "log"), (tf.sin, tf.cos, tf.exp, protected_log)
         )
     ]
 )

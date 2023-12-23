@@ -9,7 +9,11 @@ from scipy.optimize import basinhopping
 from tensorflow.keras.losses import MSE
 from tensorflow.keras.models import Model
 
+from .constants import NP_FLOAT_DTYPE, TF_FLOAT_DTYPE
+from .logging import getLogger
 from .tokens import BASE_TOKENS, Token, TokenSequence
+
+LOGGER = getLogger("Expression")
 
 
 @dataclass
@@ -89,6 +93,8 @@ class Node:
     def tf_eval(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
         if constants is None:
             constants = []
+        if isinstance(X, pd.DataFrame):
+            X = format_as_dict_of_tensor(X)
         return walk(self, tf_eval, X=X, constants={"iter": 0, "value": constants})
 
     def is_complete(self):
@@ -230,7 +236,7 @@ def count_constant(
 
 def format_as_dict_of_tensor(X: pd.DataFrame):
     return {
-        key: tf.convert_to_tensor(value, dtype=tf.float32)
+        key: tf.convert_to_tensor(value, dtype=TF_FLOAT_DTYPE)
         for key, value in X.to_dict("list").items()
     }
 
@@ -260,18 +266,13 @@ class Expression:
     def __init__(self, tree: "Node"):
         self.tree = tree
         self.n_const = tree.n_constant
-        self.constants = np.random.randn(self.n_const)
-
-    @staticmethod
-    def preprocess(X: pd.DataFrame):
-        if isinstance(X, pd.DataFrame):
-            return format_as_dict_of_tensor(X)
-        return X
+        self.constants = np.random.randn(self.n_const).astype(NP_FLOAT_DTYPE)
 
     def eval(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
-        X = self.preprocess(X)
         if constants is None:
             constants = self.constants
+        # TODO seems that the optimizer does not preserve datatype, and tensorflow don't like it...
+        constants = np.array(constants).astype(NP_FLOAT_DTYPE)
 
         return self.tree.tf_eval(X=X, constants=constants)
 
@@ -280,23 +281,28 @@ class Expression:
         X: pd.DataFrame,
         y: Optional[pd.Series] = None,
         T=1e-3,
-        step_size=1e-1,
+        step_size=0.1,
         niter: int = 500,
         **kwargs,
     ):
         # TODO optimize parameters :
         #  T, stepsize, niter, nitersucess
         #  see to implement BFGS in tensorflow ?
-        res = basinhopping(
-            lambda constants: MSE(y, self.eval(X, constants)),
-            self.constants,
-            T=T,
-            stepsize=step_size,
-            niter=niter,
-            **kwargs,
-        )
-        self.res_ = res
-        self.constants = res.x
+        if self.n_const > 0:
+            y = tf.convert_to_tensor(y)
+            res = basinhopping(
+                lambda constants: MSE(y, self.eval(X, constants)),
+                self.constants,
+                T=T,
+                stepsize=step_size,
+                niter=niter,
+                # callback=print,
+                **kwargs,
+            )
+            self.res_ = res
+            self.constants = res.x
+        else:
+            self.res_ = "No const to optimize"
         return self
 
 
@@ -306,7 +312,7 @@ class EvalModel(Model):
         self.tree = tree
         num_constants = tree.n_constant
         self.constants = tf.Variable(
-            np.random.randn(num_constants) * 4 - 2, dtype=tf.float32, trainable=True
+            np.random.randn(num_constants) * 4 - 2, dtype=TF_FLOAT_DTYPE, trainable=True
         )
         self.build(tf.TensorShape(None))
 
@@ -321,3 +327,23 @@ class EvalModel(Model):
             y = tf.convert_to_tensor(y)
 
         super().fit(x, y, *args, **kwargs)
+
+
+class ExpressionEnsemble:
+    def __init__(self, sequences, lengths):
+        self.expressions = [
+            Expression(Node.from_sequence(sequence[:length]))
+            for sequence, length in zip(sequences, lengths)
+        ]
+        self.log = LOGGER.bind(object="ExpressionEnsemble")
+
+    def eval(self, X: pd.DataFrame):
+        """Returns the evaluation of all the expressions (n_expression, n_point)"""
+        return tf.stack([expression.eval(X) for expression in self.expressions])
+
+    def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs):
+        for n, expression in enumerate(self.expressions):
+            self.log.debug(
+                f"Fitting {n + 1}/{len(self.expressions)}: {expression.tree}"
+            )
+            expression.fit(X, y, **kwargs)
