@@ -3,7 +3,7 @@ import unittest
 from equation_discover import *
 
 
-class TestExpression(unittest.TestCase):
+class TestExpressionEnsemble(unittest.TestCase):
     def setUp(self):
         n_samples = 32
         sampler = EquationSampler(BASE_TOKENS, 16, 2)
@@ -20,5 +20,28 @@ class TestExpression(unittest.TestCase):
 
     def test_build_tree(self):
         for sequence, length in zip(self.sequences, self.lengths):
-            tree = Node.build_tree(sequence[0:length], BASE_TOKENS)
+            tree = Node.from_sequence(sequence[0:length], BASE_TOKENS)
             self.assertIsNotNone(tree)
+
+
+class TestExpression(unittest.TestCase):
+    def setUp(self):
+        self.sequence = [
+            BASE_TOKENS.symbols.index(value)
+            for value in ["sin", "+", "*", "const", "var_x", "const"]
+        ]
+        self.X = pd.DataFrame(np.linspace(-2 * np.pi, 2 * np.pi), columns=["var_x"])
+        self.y = np.sin((self.X * 2 + 1).squeeze())
+
+    def test_expression_eval(self):
+        tree = Node.from_sequence(sequence=self.sequence, tokens=BASE_TOKENS)
+
+        expression = Expression(tree)
+        results = expression.eval(self.X)
+        self.assertEqual(results.shape[0], self.X.shape[0])
+
+    def test_expression_fit(self):
+        tree = Node.from_sequence(sequence=self.sequence, tokens=BASE_TOKENS)
+        expression = Expression(tree)
+        expression.fit(self.X, self.y)
+        self.assertIsNotNone(expression.res_)

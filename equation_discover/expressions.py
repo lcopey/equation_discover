@@ -43,7 +43,7 @@ class Node:
         )
 
     @classmethod
-    def build_tree(cls, sequence, tokens: TokenSequence = BASE_TOKENS):
+    def from_sequence(cls, sequence, tokens: TokenSequence = BASE_TOKENS):
         value = sequence[0]
         token = tokens[value]
         root = cls.from_token(token, parent=None)
@@ -86,7 +86,9 @@ class Node:
     def n_constant(self) -> int:
         return walk(self, count_constant)
 
-    def tf_eval(self, X: pd.DataFrame, constants: Iterable):
+    def tf_eval(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
+        if constants is None:
+            constants = []
         return walk(self, tf_eval, X=X, constants={"iter": 0, "value": constants})
 
     def is_complete(self):
@@ -284,6 +286,7 @@ class Expression:
     ):
         # TODO optimize parameters :
         #  T, stepsize, niter, nitersucess
+        #  see to implement BFGS in tensorflow ?
         res = basinhopping(
             lambda constants: MSE(y, self.eval(X, constants)),
             self.constants,
@@ -292,6 +295,7 @@ class Expression:
             niter=niter,
             **kwargs,
         )
+        self.res_ = res
         self.constants = res.x
         return self
 
