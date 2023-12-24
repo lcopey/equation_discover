@@ -1,5 +1,6 @@
 from .expressions import *
 from .proxy import *
+from .rewards import *
 from .sample import *
 from .sample_problems import *
 from .symbolic_regressor import *

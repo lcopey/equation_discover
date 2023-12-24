@@ -1,7 +1,7 @@
-import functools
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Callable, Iterable, Literal, Optional
+from typing import (Any, Callable, Iterable, Literal, Optional, TypedDict,
+                    overload)
 
 import numpy as np
 import pandas as pd
@@ -11,8 +11,9 @@ from scipy.optimize import basinhopping
 from tensorflow.keras.losses import MSE
 from tensorflow.keras.models import Model
 
-from .constants import NP_FLOAT_DTYPE, TF_FLOAT_DTYPE
+from .constants import TF_FLOAT_DTYPE
 from .logging import getLogger
+from .rewards import rsquared
 from .tokens import BASE_TOKENS, Token, TokenSequence
 
 LOGGER = getLogger("Expression")
@@ -95,8 +96,9 @@ class Node:
     def tf_eval(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
         if constants is None:
             constants = []
-        if isinstance(X, pd.DataFrame):
-            X = format_as_dict_of_tensor(X)
+        # if isinstance(X, pd.DataFrame):
+        #     X = format_as_dict_of_tensor(X)
+        X = pandas_to_tensor(X)
         return walk(self, tf_eval, X=X, constants={"iter": 0, "value": constants})
 
     def is_complete(self):
@@ -184,26 +186,25 @@ def tree_node_repr(node: "Node", left_repr: str, right_repr: str, level: int = 0
     match node.arity:
         case 2:
             return f"{node.symbol}\n" f"{tab}|-{left_repr}\n" f"{tab}|-{right_repr}"
-
         case 1:
             return f"{node.symbol}\n" f"{tab}|-{left_repr}\n"
-        case other:
+        case _:
             return f"{node.symbol}"
 
 
-def latex_repr(node: "Node", left_repr: str, right_repr: str, level: int = 0):
+def latex_repr(node: "Node", left_repr: str, right_repr: str, _: int = 0):
     match node.symbol:
         case "/":
             return f"\\frac{{{left_repr}}}{{{right_repr}}}"
         case "exp":
             return f"e^{{{left_repr}}}"
-        case other:
+        case _:
             match node.arity:
                 case 2:
                     return f"{left_repr}{node.symbol}{right_repr}"
                 case 1:
                     return f"{node.symbol} ({left_repr})"
-                case other:
+                case _:
                     return node.symbol
 
 
@@ -236,17 +237,10 @@ def count_constant(
         return current_constant + count
 
 
-def format_as_dict_of_tensor(X: pd.DataFrame):
-    return {
-        key: tf.convert_to_tensor(value, dtype=TF_FLOAT_DTYPE)
-        for key, value in X.to_dict("list").items()
-    }
-
-
 def tf_eval(
     node: "Node",
-    left,
-    right,
+    left: Optional[tf.Tensor],
+    right: Optional[tf.Tensor],
     X: dict[str, tf.Tensor],
     constants: dict[str, tf.Tensor | int],
 ):
@@ -264,56 +258,52 @@ def tf_eval(
     raise
 
 
-# class Expression:
-#     def __init__(self, tree: "Node"):
-#         self.tree = tree
-#         self.n_const = tree.n_constant
-#         self.constants = np.random.randn(self.n_const).astype(NP_FLOAT_DTYPE)
-#
-#     def __call__(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
-#         if constants is None:
-#             constants = self.constants
-#         # TODO seems that the optimizer does not preserve datatype, and tensorflow don't like it...
-#         constants = np.array(constants).astype(NP_FLOAT_DTYPE)
-#
-#         return self.tree.tf_eval(X=X, constants=constants)
-#
-#     def fit(
-#         self,
-#         X: pd.DataFrame,
-#         y: Optional[pd.Series] = None,
-#         T: float = 1e-3,
-#         step_size: float = 0.1,
-#         niter: int = 500,
-#         **kwargs,
-#     ):
-#         # TODO optimize parameters :
-#         #  T, stepsize, niter, nitersucess
-#         #  see to implement BFGS in tensorflow ?
-#         if self.n_const > 0:
-#             y = tf.convert_to_tensor(y)
-#             res = basinhopping(
-#                 lambda constants: MSE(y, self.__call__(X, constants)),
-#                 self.constants,
-#                 T=T,
-#                 stepsize=step_size,
-#                 niter=niter,
-#                 # callback=print,
-#                 **kwargs,
-#             )
-#             self.res_ = res
-#             self.constants = res.x
-#         else:
-#             self.res_ = "No const to optimize"
-#         return self
-
-
 def make_val_and_grad_fn(value_fn):
-    @functools.wraps(value_fn)
+    @wraps(value_fn)
     def val_and_grad(x):
         return tfp.math.value_and_gradient(value_fn, x)
 
     return val_and_grad
+
+
+class ExpressionInputs(TypedDict):
+    X: pd.DataFrame | dict[str, tf.Tensor]
+    constants: Optional[Iterable]
+
+
+@overload
+def pandas_to_tensor(value: pd.DataFrame) -> dict[str, tf.Tensor]:
+    ...
+
+
+@overload
+def pandas_to_tensor(value: pd.Series) -> tf.Tensor:
+    ...
+
+
+@overload
+def pandas_to_tensor(value: dict[str, tf.Tensor]) -> dict[str, tf.Tensor]:
+    ...
+
+
+@overload
+def pandas_to_tensor(value: tf.Tensor) -> tf.Tensor:
+    ...
+
+
+def pandas_to_tensor(
+    value: pd.DataFrame | pd.Series | dict[str, tf.Tensor] | tf.Tensor,
+) -> dict[str, tf.Tensor] | tf.Tensor:
+    if isinstance(value, pd.DataFrame):
+        return {
+            key: tf.convert_to_tensor(value, dtype=TF_FLOAT_DTYPE)
+            for key, value in value.to_dict("list").items()
+        }
+    elif isinstance(value, pd.Series):
+        return tf.convert_to_tensor(value, dtype=TF_FLOAT_DTYPE)
+
+    else:
+        return value
 
 
 class Expression(Model):
@@ -326,26 +316,30 @@ class Expression(Model):
         )
         self.build(tf.TensorShape(None))
 
-    def call(self, inputs: Any, training: Any = None, mask: Any = None):
+    def call(self, inputs: ExpressionInputs, training: Any = None, mask: Any = None):
         X = inputs["X"]
         constants = inputs["constants"]
         return self.tree.tf_eval(X=X, constants=constants)
 
-    def eval(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
+    def eval(
+        self,
+        X: pd.DataFrame | dict[str, tf.Tensor],
+        constants: Optional[Iterable] = None,
+    ):
         if constants is None:
             constants = self.constants
-        if isinstance(X, pd.DataFrame):
-            X = format_as_dict_of_tensor(X)
+        X = pandas_to_tensor(X)
         return self({"X": X, "constants": constants})
 
     def optimize_constants(
-        self, X, y, mode: Literal["lbfgs", "basinhopping"], **kwargs
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        mode: Literal["lbfgs", "basinhopping"],
+        **kwargs,
     ):
-        if isinstance(X, pd.DataFrame):
-            X = format_as_dict_of_tensor(X)
-        if isinstance(y, pd.Series):
-            y = tf.convert_to_tensor(y)
-
+        X = pandas_to_tensor(X)
+        y = pandas_to_tensor(y)
         if self.n_const > 0:
             if mode == "lbfgs":
                 return self._lbfgs(X, y, **kwargs)
@@ -354,7 +348,7 @@ class Expression(Model):
         else:
             self.res_ = "No const to optimize"
 
-    def _lbfgs(self, X, y, *args, **kwargs):
+    def _lbfgs(self, X: dict[str, tf.Tensor], y: tf.Tensor = None, *args, **kwargs):
         value_and_grad_func = make_val_and_grad_fn(
             lambda constants: MSE(y, self.eval(X, constants))
         )
@@ -365,8 +359,8 @@ class Expression(Model):
 
     def _basinhopping(
         self,
-        X: pd.DataFrame,
-        y: Optional[pd.Series] = None,
+        X: dict[str, tf.Tensor],
+        y: tf.Tensor = None,
         T: float = 1e-3,
         step_size: float = 0.1,
         niter: int = 500,
@@ -377,7 +371,7 @@ class Expression(Model):
         y = tf.convert_to_tensor(y)
         res = basinhopping(
             lambda constants: MSE(y, self.eval(X, constants)),
-            self.constants,
+            np.array(self.constants),
             T=T,
             stepsize=step_size,
             niter=niter,
@@ -388,6 +382,18 @@ class Expression(Model):
         self.constants = res.x
         return self
 
+    def reward(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        reward_func: Callable[[tf.Tensor, tf.Tensor], float] = None,
+    ):
+        if reward_func is None:
+            reward_func = rsquared
+        y_pred = self.eval(X)
+        y = pandas_to_tensor(y)
+        return reward_func(y, y_pred)
+
 
 class ExpressionEnsemble:
     def __init__(self, sequences, lengths):
@@ -395,15 +401,29 @@ class ExpressionEnsemble:
             Expression(Node.from_sequence(sequence[:length]))
             for sequence, length in zip(sequences, lengths)
         ]
-        self.log = LOGGER.bind(object="ExpressionEnsemble")
+        self.logger = LOGGER.bind(object="ExpressionEnsemble")
 
     def eval(self, X: pd.DataFrame):
         """Returns the evaluation of all the expressions (n_expression, n_point)"""
-        return tf.stack([expression.__call__(X) for expression in self.expressions])
+        return tf.stack([expression.eval(X) for expression in self.expressions])
 
-    def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs):
+    def optimize_constants(
+        self, X: pd.DataFrame | dict[str, tf.Tensor], y: pd.Series | tf.Tensor, **kwargs
+    ):
         for n, expression in enumerate(self.expressions):
-            self.log.debug(
+            self.logger.debug(
                 f"Fitting {n + 1}/{len(self.expressions)}: {expression.tree}"
             )
             expression.optimize_constants(X, y, mode="lbfgs", **kwargs)
+
+    def score(
+        self,
+        X: pd.DataFrame | dict[str, tf.Tensor],
+        y: pd.Series | tf.Tensor,
+        score_func: Callable[[tf.Tensor, tf.Tensor], float] = None,
+    ):
+        if score_func is None:
+            score_func = rsquared
+        y = pandas_to_tensor(y)
+        y_pred = self.eval(X)
+        return score_func(y_pred, y)

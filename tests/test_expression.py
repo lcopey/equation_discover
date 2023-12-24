@@ -19,9 +19,14 @@ class TestExpressionEnsemble(unittest.TestCase):
         self.lengths = lengths
 
     def test_build_tree(self):
-        for sequence, length in zip(self.sequences, self.lengths):
-            tree = Node.from_sequence(sequence[0:length], BASE_TOKENS)
-            self.assertIsNotNone(tree)
+        ensemble = ExpressionEnsemble(self.sequences, self.lengths)
+        self.assertIsNotNone(ensemble)
+
+    def test_eval(self):
+        ensemble = ExpressionEnsemble(self.sequences, self.lengths)
+        X = pd.DataFrame(np.linspace(-2 * np.pi, 2 * np.pi), columns=["var_x"])
+        results = ensemble.eval(X)
+        self.assertEqual(results.shape, (self.sequences.shape[0], X.shape[0]))
 
 
 class TestExpression(unittest.TestCase):
@@ -44,9 +49,16 @@ class TestExpression(unittest.TestCase):
             results = expression.eval(self.X)
             self.assertEqual(results.shape[0], self.X.shape[0])
 
-    def test_expression_fit(self):
+    def test_expression_fit_lbfgs(self):
         for sequence in [self.sequence_wo_const, self.sequence]:
             tree = Node.from_sequence(sequence=sequence, tokens=BASE_TOKENS)
             expression = Expression(tree)
             expression.optimize_constants(self.X, self.y, mode="lbfgs")
+            self.assertIsNotNone(expression.res_)
+
+    def test_expression_fit_basinhopping(self):
+        for sequence in [self.sequence_wo_const, self.sequence]:
+            tree = Node.from_sequence(sequence=sequence, tokens=BASE_TOKENS)
+            expression = Expression(tree)
+            expression.optimize_constants(self.X, self.y, mode="basinhopping")
             self.assertIsNotNone(expression.res_)
