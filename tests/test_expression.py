@@ -48,5 +48,5 @@ class TestExpression(unittest.TestCase):
         for sequence in [self.sequence_wo_const, self.sequence]:
             tree = Node.from_sequence(sequence=sequence, tokens=BASE_TOKENS)
             expression = Expression(tree)
-            expression.fit(self.X, self.y)
+            expression.optimize_constants(self.X, self.y, mode="lbfgs")
             self.assertIsNotNone(expression.res_)

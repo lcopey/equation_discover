@@ -1,10 +1,12 @@
+import functools
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, Literal, Optional
 
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import tensorflow_probability as tfp
 from scipy.optimize import basinhopping
 from tensorflow.keras.losses import MSE
 from tensorflow.keras.models import Model
@@ -262,71 +264,129 @@ def tf_eval(
     raise
 
 
-class Expression:
+# class Expression:
+#     def __init__(self, tree: "Node"):
+#         self.tree = tree
+#         self.n_const = tree.n_constant
+#         self.constants = np.random.randn(self.n_const).astype(NP_FLOAT_DTYPE)
+#
+#     def __call__(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
+#         if constants is None:
+#             constants = self.constants
+#         # TODO seems that the optimizer does not preserve datatype, and tensorflow don't like it...
+#         constants = np.array(constants).astype(NP_FLOAT_DTYPE)
+#
+#         return self.tree.tf_eval(X=X, constants=constants)
+#
+#     def fit(
+#         self,
+#         X: pd.DataFrame,
+#         y: Optional[pd.Series] = None,
+#         T: float = 1e-3,
+#         step_size: float = 0.1,
+#         niter: int = 500,
+#         **kwargs,
+#     ):
+#         # TODO optimize parameters :
+#         #  T, stepsize, niter, nitersucess
+#         #  see to implement BFGS in tensorflow ?
+#         if self.n_const > 0:
+#             y = tf.convert_to_tensor(y)
+#             res = basinhopping(
+#                 lambda constants: MSE(y, self.__call__(X, constants)),
+#                 self.constants,
+#                 T=T,
+#                 stepsize=step_size,
+#                 niter=niter,
+#                 # callback=print,
+#                 **kwargs,
+#             )
+#             self.res_ = res
+#             self.constants = res.x
+#         else:
+#             self.res_ = "No const to optimize"
+#         return self
+
+
+def make_val_and_grad_fn(value_fn):
+    @functools.wraps(value_fn)
+    def val_and_grad(x):
+        return tfp.math.value_and_gradient(value_fn, x)
+
+    return val_and_grad
+
+
+class Expression(Model):
     def __init__(self, tree: "Node"):
+        super().__init__()
         self.tree = tree
         self.n_const = tree.n_constant
-        self.constants = np.random.randn(self.n_const).astype(NP_FLOAT_DTYPE)
+        self.constants = tf.Variable(
+            np.random.randn(self.n_const) * 4 - 2, dtype=TF_FLOAT_DTYPE, trainable=True
+        )
+        self.build(tf.TensorShape(None))
+
+    def call(self, inputs: Any, training: Any = None, mask: Any = None):
+        X = inputs["X"]
+        constants = inputs["constants"]
+        return self.tree.tf_eval(X=X, constants=constants)
 
     def eval(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
         if constants is None:
             constants = self.constants
-        # TODO seems that the optimizer does not preserve datatype, and tensorflow don't like it...
-        constants = np.array(constants).astype(NP_FLOAT_DTYPE)
+        if isinstance(X, pd.DataFrame):
+            X = format_as_dict_of_tensor(X)
+        return self({"X": X, "constants": constants})
 
-        return self.tree.tf_eval(X=X, constants=constants)
+    def optimize_constants(
+        self, X, y, mode: Literal["lbfgs", "basinhopping"], **kwargs
+    ):
+        if isinstance(X, pd.DataFrame):
+            X = format_as_dict_of_tensor(X)
+        if isinstance(y, pd.Series):
+            y = tf.convert_to_tensor(y)
 
-    def fit(
+        if self.n_const > 0:
+            if mode == "lbfgs":
+                return self._lbfgs(X, y, **kwargs)
+            elif mode == "basinhopping":
+                return self._basinhopping(X, y, **kwargs)
+        else:
+            self.res_ = "No const to optimize"
+
+    def _lbfgs(self, X, y, *args, **kwargs):
+        value_and_grad_func = make_val_and_grad_fn(
+            lambda constants: MSE(y, self.eval(X, constants))
+        )
+        res = tfp.optimizer.lbfgs_minimize(value_and_grad_func, self.constants)
+        self.res_ = res
+        self.constants = self.res_.position
+        return self
+
+    def _basinhopping(
         self,
         X: pd.DataFrame,
         y: Optional[pd.Series] = None,
-        T=1e-3,
-        step_size=0.1,
+        T: float = 1e-3,
+        step_size: float = 0.1,
         niter: int = 500,
         **kwargs,
     ):
         # TODO optimize parameters :
         #  T, stepsize, niter, nitersucess
-        #  see to implement BFGS in tensorflow ?
-        if self.n_const > 0:
-            y = tf.convert_to_tensor(y)
-            res = basinhopping(
-                lambda constants: MSE(y, self.eval(X, constants)),
-                self.constants,
-                T=T,
-                stepsize=step_size,
-                niter=niter,
-                # callback=print,
-                **kwargs,
-            )
-            self.res_ = res
-            self.constants = res.x
-        else:
-            self.res_ = "No const to optimize"
-        return self
-
-
-class EvalModel(Model):
-    def __init__(self, tree: "Node"):
-        super().__init__()
-        self.tree = tree
-        num_constants = tree.n_constant
-        self.constants = tf.Variable(
-            np.random.randn(num_constants) * 4 - 2, dtype=TF_FLOAT_DTYPE, trainable=True
+        y = tf.convert_to_tensor(y)
+        res = basinhopping(
+            lambda constants: MSE(y, self.eval(X, constants)),
+            self.constants,
+            T=T,
+            stepsize=step_size,
+            niter=niter,
+            # callback=print,
+            **kwargs,
         )
-        self.build(tf.TensorShape(None))
-
-    def call(self, inputs: Any, training: Any = None, mask: Any = None):
-        return self.tree.tf_eval(X=inputs, constants=self.constants)
-
-    @wraps(Model.fit)
-    def fit(self, x, y, *args, **kwargs):
-        if isinstance(x, pd.DataFrame):
-            x = format_as_dict_of_tensor(x)
-        if isinstance(y, pd.Series):
-            y = tf.convert_to_tensor(y)
-
-        super().fit(x, y, *args, **kwargs)
+        self.res_ = res
+        self.constants = res.x
+        return self
 
 
 class ExpressionEnsemble:
@@ -339,11 +399,11 @@ class ExpressionEnsemble:
 
     def eval(self, X: pd.DataFrame):
         """Returns the evaluation of all the expressions (n_expression, n_point)"""
-        return tf.stack([expression.eval(X) for expression in self.expressions])
+        return tf.stack([expression.__call__(X) for expression in self.expressions])
 
     def fit(self, X: pd.DataFrame, y: pd.Series, **kwargs):
         for n, expression in enumerate(self.expressions):
             self.log.debug(
                 f"Fitting {n + 1}/{len(self.expressions)}: {expression.tree}"
             )
-            expression.fit(X, y, **kwargs)
+            expression.optimize_constants(X, y, mode="lbfgs", **kwargs)
