@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from functools import wraps
-from typing import (Any, Callable, Iterable, Literal, Optional, TypedDict,
-                    overload)
+from typing import Any, Callable, Iterable, Literal, Optional, TypedDict, overload
 
 import numpy as np
 import pandas as pd

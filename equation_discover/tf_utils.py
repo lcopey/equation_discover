@@ -5,8 +5,14 @@ def tf_isin(targets, values):
     return tf.reduce_any(tf.equal(tf.expand_dims(targets, axis=1), values), axis=1)
 
 
-def tf_bitwise(x, y):
-    return tf.reduce_all(tf.concat((x[:, None], y[:, None]), axis=1), axis=1)
+def tf_vstack(list_of_vectors: list[tf.Tensor]) -> tf.Tensor:
+    """Tensors should be unidimensional"""
+    return tf.transpose(tf.stack(list_of_vectors))
+
+
+def tf_append(tensor: tf.Tensor, vector: tf.Tensor):
+    """Append vector (1d) to the end of tensor"""
+    return tf.concat([tensor, vector[:, None]], axis=1)
 
 
 class TensorExpress:
