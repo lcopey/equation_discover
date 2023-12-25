@@ -396,7 +396,11 @@ class Expression(Model):
 
 
 class ExpressionEnsemble:
-    def __init__(self, sequences, lengths):
+    def __init__(
+        self,
+        sequences: tf.Tensor,
+        lengths: tf.Tensor,
+    ):
         self.expressions = [
             Expression(Node.from_sequence(sequence[:length]))
             for sequence, length in zip(sequences, lengths)

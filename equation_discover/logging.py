@@ -2,7 +2,7 @@ import logging
 from typing import Literal
 
 logging.basicConfig(
-    format="%(process)d - %(levelname)s - %(asctime)s - %(message)s",
+    format="%(levelname)s - %(asctime)s - %(message)s",
     level=logging.DEBUG,
     datefmt="%d-%b-%y %H:%M:%S",
 )

@@ -1,361 +1,98 @@
-from typing import Literal
+from dataclasses import dataclass
+from functools import wraps
+from typing import Callable, Optional, TypedDict
 
+import numpy as np
+import pandas as pd
 import tensorflow as tf
-from tensorflow.keras.layers import Dense, Embedding, SimpleRNN, StringLookup
 from tensorflow.keras.models import Model
 
-from .constants import TF_FLOAT_DTYPE, TF_INT_DTYPE
-from .tf_utils import TensorExpress, tf_bitwise, tf_isin
-from .tokens import TokenSequence
+from .expressions import ExpressionEnsemble, pandas_to_tensor
+from .sampler import Sampler
 
 
-class Constraint:
-    def __call__(
-        self,
-        ssampler: "EquationSampler",
-        output: tf.Tensor,
-        counters: tf.Tensor,
-        lengths: tf.Tensor,
-        sequences: tf.Tensor,
-    ):
-        raise NotImplementedError
+class SymbolicRegressorInputs(TypedDict):
+    X: pd.DataFrame | dict[str, tf.Tensor]
+    y: pd.Series | tf.Tensor
 
 
-class MinLengthConstraint(Constraint):
-    def __call__(
-        self,
-        sampler: "EquationSampler",
-        output: tf.Tensor,
-        counters: tf.Tensor,
-        lengths: tf.Tensor,
-        sequences: tf.Tensor,
-    ):
-        # mask (n_samples, 1)
-        min_boolean_mask = tf.cast(
-            counters + lengths
-            >= tf.ones(counters.shape, dtype=TF_INT_DTYPE) * sampler.min_lengths,
-            dtype=TF_FLOAT_DTYPE,
-        )[:, None]
-
-        # mask (n, n_operators)
-        min_length_mask = tf.maximum(
-            tf.cast(sampler.tokens.non_zero_arity_mask, dtype=TF_FLOAT_DTYPE)[None, :],
-            min_boolean_mask,
-        )
-
-        # zero out all terminal node
-        output = tf.minimum(output, min_length_mask)
-
-        return output
+@dataclass
+class SymbolicRegressorOutput:
+    expressions: ExpressionEnsemble
+    y: tf.Tensor
+    rewards: Optional[tf.Tensor] = None
+    entropies: Optional[tf.Tensor] = None
+    log_probs: Optional[tf.Tensor] = None
 
 
-class MaxLengthConstraint(Constraint):
-    def __call__(
-        self,
-        sampler: "EquationSampler",
-        output: tf.Tensor,
-        counters: tf.Tensor,
-        lengths: tf.Tensor,
-        sequences: tf.Tensor,
-    ):
-        max_length_mask = tf.cast(
-            counters + lengths
-            <= tf.ones(counters.shape, dtype=TF_INT_DTYPE) * (12 - 2),
-            dtype=TF_FLOAT_DTYPE,
-        )[:, None]
-        max_length_mask = tf.maximum(
-            tf.cast(sampler.tokens.zero_arity_mask, dtype=TF_FLOAT_DTYPE)[None, :],
-            max_length_mask,
-        )
-        output = tf.minimum(output, max_length_mask)
-
-        return output
-
-
-class MinVariableExpression(Constraint):
-    def __call__(
-        self,
-        sampler: "EquationSampler",
-        output: tf.Tensor,
-        counters: tf.Tensor,
-        lengths: tf.Tensor,
-        sequences: tf.Tensor,
-    ):
-        # non zero arity or non variable
-        nonvar_zeroarity_mask = tf.cast(
-            ~tf.logical_and(
-                sampler.tokens.zero_arity_mask, sampler.tokens.nonvariable_mask
-            ),
-            dtype=TF_FLOAT_DTYPE,
-        )
-
-        if lengths[0] == 0:
-            output = tf.minimum(output, nonvar_zeroarity_mask)
-            return output
-
-        else:
-            nonvar_zeroarity_mask = tf.tile(
-                nonvar_zeroarity_mask[None, :], multiples=(counters.shape[0], 1)
-            )
-            counter_mask = counters == 1
-
-            if sequences.ndim == 1:
-                sequences = sequences[:, None]
-            contains_novar_mask = ~tf.reduce_any(
-                tf_isin(
-                    sequences,
-                    sampler.tokens.variable_tensor
-                    # tf.cast(sampler.tokens.variable_tensor, dtype=TF_DTYPE)
-                ),
-                axis=1,
-            )
-
-            last_token_and_no_var_mask = tf.cast(
-                ~tf.logical_and(counter_mask, contains_novar_mask)[:, None],
-                dtype=TF_FLOAT_DTYPE,
-            )
-
-            nonvar_zeroarity_mask = tf.maximum(
-                nonvar_zeroarity_mask, last_token_and_no_var_mask
-            )
-
-            output = tf.minimum(output, nonvar_zeroarity_mask)
-            return output
-
-
-class EquationSampler(Model):
+class SymbolicLoss:
     def __init__(
         self,
-        tokens: TokenSequence,
-        hidden_size: int,
-        num_layers: int = 1,
-        type: Literal["rnn"] = "rnn",
-        dropout: float = 0,
-        embedding_dim: int = 0,
-        min_lengths: int = 2,
+        score_func: Callable[[tf.Tensor, tf.Tensor], tf.Tensor],
+        risk_seeking: float = 0.1,
+    ):
+        self.risk_seeking = risk_seeking
+        self.score_func = score_func
+
+    def __call__(self, y_true, predictions: SymbolicRegressorOutput):
+        rewards = self.score_func(y_true, predictions.y)
+        threshold = np.quantile(rewards, 1 - self.risk_seeking)
+        mask = rewards > threshold
+
+        # select best rewards
+        best_rewards = rewards[mask]
+        best_entropies = predictions.entropies[mask]
+        best_log_probs = predictions.log_probs[mask]
+        risk_seeking_loss = tf.clip_by_value(
+            tf.reduce_sum((best_rewards - threshold) * best_log_probs)
+            / best_rewards.shape[0],
+            -1e6,
+            1e6,
+        )
+        entropy_loss = tf.clip_by_value(
+            tf.reduce_sum(best_entropies) / best_rewards.shape[0], -1e6, 1e6
+        )
+        return risk_seeking_loss + entropy_loss
+
+
+class SymbolicRegressor(Model):
+    def __init__(
+        self,
+        sampler: Sampler,
+        n_samples: int = 32,
+        risk_seeking: float = 0.1,
     ):
         super().__init__()
-        self.input_size = 2 * len(tokens)
-        self.output_size = len(tokens)
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.dropout = dropout
-        self.tokens = tokens
-        self.type = type
-        self.min_lengths = min_lengths
-        self.constraints = [
-            MinLengthConstraint(),
-            MaxLengthConstraint(),
-            MinVariableExpression(),
-        ]
+        self.sampler = sampler
+        self.n_samples = n_samples
+        self.risk_seeking = risk_seeking
+        self.build(tf.TensorShape(None))
 
-        self.input_tensor = tf.Variable(
-            initial_value=tf.random.uniform(shape=(1, self.input_size)),
-            trainable=True,
-        )
-        self.init_hidden = tf.Variable(
-            initial_value=tf.random.uniform(shape=(1, self.hidden_size)), trainable=True
-        )
+    def call(
+        self, inputs: SymbolicRegressorInputs, training=None, mask=None
+    ) -> SymbolicRegressorOutput:
+        X = inputs["X"]
+        y = inputs["y"]
+        (
+            sequences,
+            lengths,
+            log_probs,
+            entropies,
+        ) = self.sampler.sample(self.n_samples)
+        ensemble = ExpressionEnsemble(sequences, lengths)
+        ensemble.optimize_constants(X=X, y=y)
 
-        if self.type == "rnn":
-            self.recurrent_layers = [
-                SimpleRNN(
-                    units=self.hidden_size,
-                    activation="tanh",
-                    use_bias=True,
-                    bias_initializer="zeros",
-                    dropout=self.dropout,
-                    return_sequences=False,
-                    return_state=True,
-                    stateful=False,
-                )
-                for n in range(self.num_layers)
-            ]
-            self.projection_layer = Dense(
-                units=self.output_size,
-                bias_initializer="zeros",
-            )
-
-    def call(self, input_tensor, hidden_tensor):
-        output = input_tensor
-        state = hidden_tensor
-        for layer in self.recurrent_layers:
-            output, state = layer(tf.expand_dims(output, axis=1), initial_state=state)
-
-        output = self.projection_layer(output)
-        return output, state
-
-    def sample_sequence(self, n: int):
-        shape = (n, 0)
-        sequences = tf.zeros(shape, dtype=TF_INT_DTYPE)
-        entropies = tf.zeros(shape, dtype=TF_FLOAT_DTYPE)
-        log_probs = tf.zeros(shape, dtype=TF_FLOAT_DTYPE)
-
-        sequence_mask = tf.ones((n, 1), dtype=tf.bool)
-        input_tensor = tf.tile(self.input_tensor, (n, 1))
-        hidden_tensor = tf.tile(self.init_hidden, (n, 1))
-
-        # number of tokens that must be sampled to complete expression
-        counters = tf.ones(n, dtype=TF_INT_DTYPE)
-        # number of tokens currently in expressions
-        # TODO is lengths useful ?
-        lengths = tf.zeros(n, dtype=TF_INT_DTYPE)
-
-        while tf.reduce_any(tf.reduce_all(sequence_mask, axis=1)):
-            tokens, log_prob, entropy = self.sample_tokens(
-                input_tensor, hidden_tensor, counters, lengths, sequences
-            )
-            counters -= 1
-            counters += (
-                tf.cast(
-                    tf_isin(tokens, self.tokens.two_arity_tensor), dtype=TF_INT_DTYPE
-                )
-                * 2
-            )
-            counters += tf.cast(
-                tf_isin(tokens, self.tokens.one_arity_tensor), dtype=TF_INT_DTYPE
-            )
-
-            lengths += 1
-
-            # concat in the sequences
-            sequence_mask = tf.concat(
-                [
-                    sequence_mask,
-                    tf_bitwise((counters > 0), tf.reduce_all(sequence_mask, axis=1))[
-                        :, None
-                    ],
-                ],
-                axis=1,
-            )
-
-            sequences = tf.concat([sequences, tokens[:, None]], axis=1)
-            entropies = tf.concat([entropies, entropy[:, None]], axis=1)
-            log_probs = tf.concat([log_probs, log_prob[:, None]], axis=1)
-
-            parent_sibling = self.get_parent_sibling(sequences, lengths)
-            input_tensor = self.get_next_input(parent_sibling)
-
-        lengths = TensorExpress(sequence_mask).int().sum(axis=1)
-        return sequences, entropies, log_probs, counters, lengths, sequence_mask
-
-    def sample_tokens(self, input_tensor, hidden_tensor, counters, lengths, sequences):
-        output, state = self(input_tensor, hidden_tensor)
-        output = tf.nn.softmax(output)
-        output = self.apply_constraints(
-            output=output, counters=counters, lengths=lengths, sequences=sequences
+        return SymbolicRegressorOutput(
+            expressions=ensemble,
+            y=ensemble.eval(X),
+            # rewards=ensemble.score(X, y),
+            entropies=entropies,
+            log_probs=log_probs,
         )
 
-        # compute probabilities
-        token_probabilities = output / tf.reduce_sum(output, axis=1)[:, None]
-        token_log_probabilities = tf.math.log(token_probabilities)
-
-        # sample categories and squeeze the resulting tensor
-        tokens = tf.random.categorical(token_log_probabilities, 1, dtype=TF_INT_DTYPE)[
-            :, 0
-        ]
-        indices = tf.concat(
-            (tf.range(0, tokens.shape[0])[:, None], tokens[:, None]), axis=1
-        )
-        # get the log prob and entropies of sampled categories
-        log_prob = tf.gather_nd(token_log_probabilities, indices=indices)
-        # token_log_probabilities might be infinite if token_probabilities equals zeros
-        entropy = tf.reduce_sum(
-            tf.where(
-                ~tf.math.is_inf(token_log_probabilities),
-                -token_probabilities * token_log_probabilities,
-                0,
-            ),
-            axis=1,
-        )
-        return tokens, log_prob, entropy
-
-    def apply_constraints(
-        self,
-        output: tf.Tensor,
-        counters: tf.Tensor,
-        lengths: tf.Tensor,
-        sequences: tf.Tensor,
-    ):
-        for constraint in self.constraints:
-            output = constraint(
-                self,
-                output=output,
-                counters=counters,
-                lengths=lengths,
-                sequences=sequences,
-            )
-
-        return output
-
-    def get_parent_sibling(self, sequences, lengths):
-        parent_sibling = tf.ones((lengths.shape[0], 2), dtype=TF_INT_DTYPE) * -1
-
-        c = tf.zeros(lengths.shape[0])
-
-        recent = lengths[0].numpy() - 1
-        for i in range(recent, -1, -1):
-            # determine arity of i-th tokens
-            token_i = sequences[:, i]
-            arity = tf.zeros(lengths.shape[0])
-            arity += (
-                tf.cast(
-                    tf_isin(token_i, self.tokens.two_arity_tensor), dtype=TF_FLOAT_DTYPE
-                )
-                * 2
-            )
-            arity += tf.cast(
-                tf_isin(token_i, self.tokens.one_arity_tensor), dtype=TF_FLOAT_DTYPE
-            )
-
-            # Increment c by arity of the i-th toke minus 1
-            c += arity
-            c -= 1
-
-            # In locations where c is zero (and parent_sibling is -1)
-            # parent_sibling is set to sequences[i] and [i+1]
-            # when on the last item of the sequence, pad with -1 to get (n, 2) tensor
-            c_mask = tf.logical_and(
-                c == 0, tf.reduce_all(parent_sibling == -1, axis=1)
-            )[:, None]
-            i_ip1 = sequences[:, i : i + 2]
-            if i == recent:
-                i_ip1 = tf.pad(i_ip1, tf.constant([[0, 0], [0, 1]]), constant_values=-1)
-            # wet i_ip1 to 0 when c_mask is False
-            i_ip1 = i_ip1 * tf.cast(c_mask, dtype=TF_INT_DTYPE)
-            parent_sibling = parent_sibling * tf.cast(~c_mask, dtype=TF_INT_DTYPE)
-            parent_sibling = parent_sibling + i_ip1
-
-        # True for most recent token is non-zero arity False otherwise
-        recent_non_zero_mask = ~tf_isin(
-            sequences[:, recent], self.tokens.zero_arity_tensor
-        )[:, None]
-        parent_sibling = parent_sibling * tf.cast(
-            ~recent_non_zero_mask, dtype=TF_INT_DTYPE
-        )
-
-        recent_parent_sibling = tf.concat(
-            [
-                sequences[:, recent, None],
-                -1 * tf.ones((lengths.shape[0], 1), dtype=TF_INT_DTYPE),
-            ],
-            axis=1,
-        )
-
-        recent_parent_sibling = recent_parent_sibling * tf.cast(
-            recent_non_zero_mask, dtype=TF_INT_DTYPE
-        )
-
-        parent_sibling = parent_sibling + recent_parent_sibling
-
-        return parent_sibling
-
-    def get_next_input(self, parent_sibling):
-        parent, sibling = parent_sibling[:, 0], parent_sibling[:, 1]
-        return tf.concat(
-            [
-                tf.one_hot(parent, depth=len(self.tokens)),
-                tf.one_hot(sibling, depth=len(self.tokens)),
-            ],
-            axis=1,
-        )
+    @wraps(Model.fit)
+    def fit(self, x=None, y=None, **kwargs):
+        x = pandas_to_tensor(x)
+        y = pandas_to_tensor(y)
+        inputs = {"X": x, "y": y}
+        super().fit(x=inputs, y=y, **kwargs)

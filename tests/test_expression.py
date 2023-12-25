@@ -6,15 +6,8 @@ from equation_discover import *
 class TestExpressionEnsemble(unittest.TestCase):
     def setUp(self):
         n_samples = 32
-        sampler = EquationSampler(BASE_TOKENS, 16, 2)
-        (
-            sequences,
-            entropies,
-            log_probs,
-            counters,
-            lengths,
-            sequence_mask,
-        ) = sampler.sample_sequence(n_samples)
+        sampler = RNNSampler(BASE_TOKENS, 16, 2)
+        (sequences, lengths, entropies, log_probs) = sampler.sample(n_samples)
         self.sequences = sequences
         self.lengths = lengths
 
