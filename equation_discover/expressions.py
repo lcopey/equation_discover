@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from functools import wraps
-from typing import Any, Callable, Iterable, Literal, Optional, TypedDict, overload
+from typing import (Any, Callable, Iterable, Literal, Optional, TypedDict,
+                    overload)
 
 import numpy as np
 import pandas as pd
@@ -58,7 +59,7 @@ class Node:
         previous = root
 
         for value in sequence[1:]:
-            current_arity -= 1
+            current_arity -= 1.0
             token = tokens[value]
             child = Node.from_token(token)
             current_arity += child.arity
@@ -95,8 +96,6 @@ class Node:
     def tf_eval(self, X: pd.DataFrame, constants: Optional[Iterable] = None):
         if constants is None:
             constants = []
-        # if isinstance(X, pd.DataFrame):
-        #     X = format_as_dict_of_tensor(X)
         X = pandas_to_tensor(X)
         return walk(self, tf_eval, X=X, constants={"iter": 0, "value": constants})
 
@@ -394,29 +393,28 @@ class Expression(Model):
         return reward_func(y, y_pred)
 
 
-class ExpressionEnsemble:
+class ExpressionEnsemble(list[Expression]):
     def __init__(
         self,
         sequences: tf.Tensor,
         lengths: tf.Tensor,
     ):
-        self.expressions = [
+        list_of_expressions = [
             Expression(Node.from_sequence(sequence[:length]))
             for sequence, length in zip(sequences, lengths)
         ]
+        super().__init__(list_of_expressions)
         self.logger = LOGGER.bind(object="ExpressionEnsemble")
 
     def eval(self, X: pd.DataFrame):
         """Returns the evaluation of all the expressions (n_expression, n_point)"""
-        return tf.stack([expression.eval(X) for expression in self.expressions])
+        return tf.stack([expression.eval(X) for expression in self])
 
     def optimize_constants(
         self, X: pd.DataFrame | dict[str, tf.Tensor], y: pd.Series | tf.Tensor, **kwargs
     ):
-        for n, expression in enumerate(self.expressions):
-            self.logger.debug(
-                f"Fitting {n + 1}/{len(self.expressions)}: {expression.tree}"
-            )
+        for n, expression in enumerate(self):
+            self.logger.debug(f"Fitting {n + 1}/{len(self)}: {expression.tree}")
             expression.optimize_constants(X, y, mode="lbfgs", **kwargs)
 
     def score(

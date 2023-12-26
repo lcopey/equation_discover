@@ -1,19 +1,34 @@
-from typing import TypedDict, Literal
+from typing import Literal, TypedDict
+
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, SimpleRNN
 
-from .sampler import Sampler, MaxLengthConstraint, MinLengthConstraint, MinVariableExpression
-from .tokens import TokenSequence
 from .constants import TF_FLOAT_DTYPE, TF_INT_DTYPE
-from .tf_utils import tf_isin, tf_vstack, tf_append
+from .sampler import (MaxLengthConstraint, MinLengthConstraint,
+                      MinVariableExpression, Sampler)
+from .tf_utils import tf_append, tf_isin, tf_vstack
+from .tokens import TokenSequence
+
+
+def _sample_token():
+    pass
 
 
 def _get_parent_sibling():
     pass
 
 
-def _update_arity():
-    pass
+def update_arity(
+    tokens: tf.Tensor, current_arity: tf.Tensor, token_library: TokenSequence
+):
+    current_arity -= 1
+    current_arity += (
+        tf.cast(tf_isin(tokens, token_library.two_arity_tensor), dtype=TF_INT_DTYPE) * 2
+    )
+    current_arity += tf.cast(
+        tf_isin(tokens, token_library.one_arity_tensor), dtype=TF_INT_DTYPE
+    )
+    return current_arity
 
 
 def _get_next_input():
@@ -27,13 +42,13 @@ class RNNSamplerInput(TypedDict):
 
 class RNNSampler(Sampler):
     def __init__(
-            self,
-            tokens: TokenSequence,
-            hidden_size: int,
-            num_layers: int = 1,
-            type: Literal["rnn"] = "rnn",
-            dropout: float = 0,
-            min_lengths: int = 2,
+        self,
+        tokens: TokenSequence,
+        hidden_size: int,
+        num_layers: int = 1,
+        type: Literal["rnn"] = "rnn",
+        dropout: float = 0,
+        min_lengths: int = 2,
     ):
         super().__init__()
         self.input_size = 2 * len(tokens)
@@ -45,9 +60,9 @@ class RNNSampler(Sampler):
         self.type = type
         self.min_lengths = min_lengths
         self.constraints = [
-            MinLengthConstraint(),
-            MaxLengthConstraint(),
-            MinVariableExpression(),
+            # MinLengthConstraint(),
+            # MaxLengthConstraint(),
+            # MinVariableExpression(),
         ]
 
         self.input_tensor = tf.Variable(
@@ -93,27 +108,40 @@ class RNNSampler(Sampler):
         return output, state
 
     def sample(self, n: int):
-        shape = (n, 0)
-        sequences = tf.zeros(shape, dtype=TF_INT_DTYPE)
-        # sequences = []
-        entropies = []
-        log_probs = []
+        sequences = tf.zeros((n, 0), dtype=TF_INT_DTYPE)
+        mask = tf.zeros((n, 0), dtype=tf.bool)
+        entropies = tf.zeros((n, 0), dtype=TF_FLOAT_DTYPE)
+        log_probs = tf.zeros((n, 0), dtype=TF_FLOAT_DTYPE)
+        # mask = []
+        # entropies = []
+        # log_probs = []
 
-        mask = []
         input_tensor = tf.tile(self.input_tensor, (n, 1))
         hidden_tensor = tf.tile(self.init_hidden, (n, 1))
 
         # number of tokens that must be sampled to complete expression
         counters = tf.ones(n, dtype=TF_INT_DTYPE)
         is_alive = tf.ones(n, dtype=tf.bool)
-        while tf.reduce_any(is_alive):
+
+        def body(
+            input_tensor,
+            hidden_tensor,
+            counters,
+            sequences,
+            is_alive,
+            mask,
+            entropies,
+            log_probs,
+        ):
             tokens, log_prob, entropy = self._sample_tokens(
                 input_tensor=input_tensor,
                 hidden_tensor=hidden_tensor,
                 counters=counters,
-                sequences=sequences
+                sequences=sequences,
             )
-            counters = self._update_arity(current_arity=counters, tokens=tokens)
+            counters = update_arity(
+                current_arity=counters, tokens=tokens, token_library=self.tokens
+            )
             # is alive either because counters is still greater than 0 and is not dead yet.
             is_alive = tf.logical_and(counters > 0, is_alive)
             sequences = tf_append(sequences, tokens)
@@ -121,14 +149,93 @@ class RNNSampler(Sampler):
             parent_sibling = self._get_parent_sibling(sequences)
             input_tensor = self._get_next_input(parent_sibling)
 
-            mask.append(is_alive)
-            entropies.append(entropy)
-            log_probs.append(log_prob)
+            mask = tf_append(mask, is_alive)
+            entropies = tf_append(entropies, entropy)
+            log_probs = tf_append(log_probs, log_prob)
+            # mask.append(is_alive)
+            # entropies.append(entropy)
+            # log_probs.append(log_prob)
+
+            return (
+                input_tensor,
+                hidden_tensor,
+                counters,
+                sequences,
+                is_alive,
+                mask,
+                entropies,
+                log_probs,
+            )
+
+        def cond(
+            input_tensor,
+            hidden_tensor,
+            counters,
+            sequences,
+            is_alive,
+            mask,
+            entropies,
+            log_probs,
+        ):
+            return tf.reduce_any(is_alive)
+
+        (
+            input_tensor,
+            hidden_tensor,
+            counters,
+            sequences,
+            is_alive,
+            mask,
+            entropies,
+            log_probs,
+        ) = tf.while_loop(
+            cond=cond,
+            body=body,
+            loop_vars=[
+                input_tensor,
+                hidden_tensor,
+                counters,
+                sequences,
+                is_alive,
+                mask,
+                entropies,
+                log_probs,
+            ],
+            shape_invariants=[
+                input_tensor.get_shape(),
+                hidden_tensor.get_shape(),
+                counters.get_shape(),
+                tf.TensorShape((n, None)),
+                is_alive.get_shape(),
+                tf.TensorShape((n, None)),
+                tf.TensorShape((n, None)),
+                tf.TensorShape((n, None)),
+            ],
+        )
+
+        # while tf.reduce_any(is_alive):
+        #     tokens, log_prob, entropy = self._sample_tokens(
+        #         input_tensor=input_tensor,
+        #         hidden_tensor=hidden_tensor,
+        #         counters=counters,
+        #         sequences=sequences
+        #     )
+        #     counters = update_arity(current_arity=counters, tokens=tokens, token_library=self.tokens)
+        #     # is alive either because counters is still greater than 0 and is not dead yet.
+        #     is_alive = tf.logical_and(counters > 0, is_alive)
+        #     sequences = tf_append(sequences, tokens)
+        #
+        #     parent_sibling = self._get_parent_sibling(sequences)
+        #     input_tensor = self._get_next_input(parent_sibling)
+        #
+        #     mask.append(is_alive)
+        #     entropies.append(entropy)
+        #     log_probs.append(log_prob)
 
         # stack vectors and transpose to get (n_sample, lengths)
-        entropies = tf_vstack(entropies)
-        log_probs = tf_vstack(log_probs)
-        mask = tf_vstack(mask)
+        # entropies = tf_vstack(entropies)
+        # log_probs = tf_vstack(log_probs)
+        # mask = tf_vstack(mask)
 
         lengths = tf.reduce_sum(tf.cast(mask, dtype=TF_INT_DTYPE), axis=-1) + 1
         mask_float = tf.cast(mask, dtype=TF_FLOAT_DTYPE)
@@ -150,8 +257,8 @@ class RNNSampler(Sampler):
 
         # sample categories and squeeze the resulting tensor
         tokens = tf.random.categorical(token_log_probabilities, 1, dtype=TF_INT_DTYPE)[
-                 :, 0
-                 ]
+            :, 0
+        ]
         indices = tf.concat(
             (tf.range(0, tokens.shape[0])[:, None], tokens[:, None]), axis=1
         )
@@ -169,10 +276,10 @@ class RNNSampler(Sampler):
         return tokens, log_prob, entropy
 
     def apply_constraints(
-            self,
-            output: tf.Tensor,
-            counters: tf.Tensor,
-            sequences: tf.Tensor,
+        self,
+        output: tf.Tensor,
+        counters: tf.Tensor,
+        sequences: tf.Tensor,
     ):
         for constraint in self.constraints:
             output = constraint(
@@ -195,7 +302,7 @@ class RNNSampler(Sampler):
         for i in range(recent, -1, -1):
             # determine arity of i-th tokens
             token_i = sequences[:, i]
-            c = self._update_arity(tokens=token_i, current_arity=c)
+            c = update_arity(tokens=token_i, current_arity=c, token_library=self.tokens)
 
             # In locations where c is zero (and parent_sibling is -1)
             # parent_sibling is set to sequences[i] and [i+1]
@@ -203,7 +310,7 @@ class RNNSampler(Sampler):
             c_mask = tf.logical_and(
                 c == 0, tf.reduce_all(parent_sibling == -1, axis=1)
             )[:, None]
-            i_ip1 = sequences[:, i: i + 2]
+            i_ip1 = sequences[:, i : i + 2]
             if i == recent:
                 i_ip1 = tf.pad(i_ip1, tf.constant([[0, 0], [0, 1]]), constant_values=-1)
             # wet i_ip1 to 0 when c_mask is False
@@ -244,14 +351,3 @@ class RNNSampler(Sampler):
             ],
             axis=1,
         )
-
-    def _update_arity(self, tokens, current_arity):
-        current_arity -= 1
-        current_arity += (
-                tf.cast(tf_isin(tokens, self.tokens.two_arity_tensor), dtype=TF_INT_DTYPE)
-                * 2
-        )
-        current_arity += tf.cast(
-            tf_isin(tokens, self.tokens.one_arity_tensor), dtype=TF_INT_DTYPE
-        )
-        return current_arity

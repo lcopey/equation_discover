@@ -1,5 +1,6 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 from equation_discover import BASE_TOKENS, RNNSampler
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
 import tensorflow as tf
-
 from tensorflow.keras.models import Model
 
 from .constants import TF_FLOAT_DTYPE, TF_INT_DTYPE
@@ -8,22 +7,22 @@ from .tf_utils import tf_isin
 
 class Constraint:
     def __call__(
-            self,
-            ssampler: "RNNSampler",
-            output: tf.Tensor,
-            counters: tf.Tensor,
-            sequences: tf.Tensor,
+        self,
+        ssampler: "RNNSampler",
+        output: tf.Tensor,
+        counters: tf.Tensor,
+        sequences: tf.Tensor,
     ):
         raise NotImplementedError
 
 
 class MinLengthConstraint(Constraint):
     def __call__(
-            self,
-            sampler: "RNNSampler",
-            output: tf.Tensor,
-            counters: tf.Tensor,
-            sequences: tf.Tensor,
+        self,
+        sampler: "RNNSampler",
+        output: tf.Tensor,
+        counters: tf.Tensor,
+        sequences: tf.Tensor,
     ):
         lengths = sequences.shape[1]
         # mask (n_samples, 1)
@@ -47,11 +46,11 @@ class MinLengthConstraint(Constraint):
 
 class MaxLengthConstraint(Constraint):
     def __call__(
-            self,
-            sampler: "RNNSampler",
-            output: tf.Tensor,
-            counters: tf.Tensor,
-            sequences: tf.Tensor,
+        self,
+        sampler: "RNNSampler",
+        output: tf.Tensor,
+        counters: tf.Tensor,
+        sequences: tf.Tensor,
     ):
         lengths = sequences.shape[1]
         max_length_mask = tf.cast(
@@ -70,11 +69,11 @@ class MaxLengthConstraint(Constraint):
 
 class MinVariableExpression(Constraint):
     def __call__(
-            self,
-            sampler: "RNNSampler",
-            output: tf.Tensor,
-            counters: tf.Tensor,
-            sequences: tf.Tensor,
+        self,
+        sampler: "RNNSampler",
+        output: tf.Tensor,
+        counters: tf.Tensor,
+        sequences: tf.Tensor,
     ):
         lengths = sequences.shape[1]
         # non zero arity or non variable
@@ -125,9 +124,9 @@ class Sampler(Model):
         raise NotImplementedError
 
     def apply_constraints(
-            self,
-            output: tf.Tensor,
-            counters: tf.Tensor,
-            sequences: tf.Tensor,
+        self,
+        output: tf.Tensor,
+        counters: tf.Tensor,
+        sequences: tf.Tensor,
     ):
         raise NotImplementedError
