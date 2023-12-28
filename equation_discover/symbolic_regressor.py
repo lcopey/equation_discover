@@ -8,7 +8,7 @@ from tensorflow.keras.models import Model
 
 from .constants import TF_FLOAT_DTYPE
 from .expressions import ExpressionEnsemble, pandas_to_tensor
-from .logging import getLogger
+from .logger import getLogger
 from .rewards import rsquared
 from .sampler import Sampler
 

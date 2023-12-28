@@ -4,8 +4,9 @@ import tensorflow as tf
 from tensorflow.keras.layers import Dense, SimpleRNN
 
 from .constants import TF_FLOAT_DTYPE, TF_INT_DTYPE
+from .logger import getLogger
 from .sampler import (MaxLengthConstraint, MinLengthConstraint,
-                      MinVariableExpression, Sampler)
+                      MinVariableExpression, Sampler, non_zero_probs)
 from .tf_utils import tf_append, tf_isin, tf_vstack
 from .tokens import TokenSequence
 
@@ -60,10 +61,12 @@ class RNNSampler(Sampler):
         self.type = type
         self.min_lengths = min_lengths
         self.constraints = [
-            # MinLengthConstraint(),
-            # MaxLengthConstraint(),
-            # MinVariableExpression(),
+            MinLengthConstraint(self),
+            MaxLengthConstraint(),
+            MinVariableExpression(self),
         ]
+
+        self.logger = getLogger("RNN Sampler")
 
         self.input_tensor = tf.Variable(
             initial_value=tf.random.uniform(shape=(1, self.input_size)),
@@ -112,9 +115,6 @@ class RNNSampler(Sampler):
         mask = tf.zeros((n, 0), dtype=tf.bool)
         entropies = tf.zeros((n, 0), dtype=TF_FLOAT_DTYPE)
         log_probs = tf.zeros((n, 0), dtype=TF_FLOAT_DTYPE)
-        # mask = []
-        # entropies = []
-        # log_probs = []
 
         input_tensor = tf.tile(self.input_tensor, (n, 1))
         hidden_tensor = tf.tile(self.init_hidden, (n, 1))
@@ -152,9 +152,6 @@ class RNNSampler(Sampler):
             mask = tf_append(mask, is_alive)
             entropies = tf_append(entropies, entropy)
             log_probs = tf_append(log_probs, log_prob)
-            # mask.append(is_alive)
-            # entropies.append(entropy)
-            # log_probs.append(log_prob)
 
             return (
                 input_tensor,
@@ -213,30 +210,6 @@ class RNNSampler(Sampler):
             ],
         )
 
-        # while tf.reduce_any(is_alive):
-        #     tokens, log_prob, entropy = self._sample_tokens(
-        #         input_tensor=input_tensor,
-        #         hidden_tensor=hidden_tensor,
-        #         counters=counters,
-        #         sequences=sequences
-        #     )
-        #     counters = update_arity(current_arity=counters, tokens=tokens, token_library=self.tokens)
-        #     # is alive either because counters is still greater than 0 and is not dead yet.
-        #     is_alive = tf.logical_and(counters > 0, is_alive)
-        #     sequences = tf_append(sequences, tokens)
-        #
-        #     parent_sibling = self._get_parent_sibling(sequences)
-        #     input_tensor = self._get_next_input(parent_sibling)
-        #
-        #     mask.append(is_alive)
-        #     entropies.append(entropy)
-        #     log_probs.append(log_prob)
-
-        # stack vectors and transpose to get (n_sample, lengths)
-        # entropies = tf_vstack(entropies)
-        # log_probs = tf_vstack(log_probs)
-        # mask = tf_vstack(mask)
-
         lengths = tf.reduce_sum(tf.cast(mask, dtype=TF_INT_DTYPE), axis=-1) + 1
         mask_float = tf.cast(mask, dtype=TF_FLOAT_DTYPE)
 
@@ -250,8 +223,10 @@ class RNNSampler(Sampler):
         output = self.apply_constraints(
             output=output, counters=counters, sequences=sequences
         )
+        output = non_zero_probs(output)
 
         # compute probabilities
+        self.logger.debug("Normalizing output", sum=tf.reduce_sum(output, axis=1))
         token_probabilities = output / tf.reduce_sum(output, axis=1)[:, None]
         token_log_probabilities = tf.math.log(token_probabilities)
 

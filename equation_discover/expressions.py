@@ -12,7 +12,7 @@ from tensorflow.keras.losses import MSE
 from tensorflow.keras.models import Model
 
 from .constants import TF_FLOAT_DTYPE
-from .logging import getLogger
+from .logger import getLogger
 from .rewards import rsquared
 from .tokens import BASE_TOKENS, Token, TokenSequence
 
