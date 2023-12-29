@@ -1,6 +1,8 @@
+from functools import wraps
 from typing import TYPE_CHECKING
 
 import tensorflow as tf
+from tensorflow.keras.layers import Layer
 
 from .constants import EPS, TF_FLOAT_DTYPE, TF_INT_DTYPE
 from .tf_utils import tf_isin
@@ -18,14 +20,11 @@ def normalize(probs: tf.Tensor) -> tf.Tensor:
     return probs / tf.reduce_sum(probs, axis=1)[:, None]
 
 
-class Constraint:
-    def __init__(self, sampler: "Sampler"):
-        self.sampler = sampler
-
-    def __call__(
+class Constraint(Layer):
+    def call(
         self,
         probs: tf.Tensor,
-        counters: tf.Tensor,
+        arities: tf.Tensor,
         sequences: tf.Tensor,
     ):
         raise NotImplementedError
@@ -33,8 +32,9 @@ class Constraint:
 
 class MinLengthConstraint(Constraint):
     def __init__(self, sampler: "RNNSampler", min_length: int = 2):
-        super().__init__(sampler)
+        super().__init__()
         self.min_length = min_length
+        self.non_zero_arity_mask = sampler.tokens.non_zero_arity_mask
 
     def get_mask(self, counters: tf.Tensor, sequences: tf.Tensor):
         lengths = sequences.shape[1]
@@ -53,22 +53,21 @@ class MinLengthConstraint(Constraint):
         # )
         min_length_mask = tf.cast(
             tf.logical_or(
-                self.sampler.tokens.non_zero_arity_mask[None, :],
+                # self.sampler.tokens.non_zero_arity_mask[None, :],
+                self.non_zero_arity_mask[None, :],
                 (counters + lengths >= self.min_length)[:, None],
             ),
             dtype=TF_FLOAT_DTYPE,
         )
         return min_length_mask
 
-    def __call__(
+    def call(
         self,
         probs: tf.Tensor,
-        counters: tf.Tensor,
+        arities: tf.Tensor,
         sequences: tf.Tensor,
     ):
-        min_length_mask = tf.stop_gradient(
-            self.get_mask(counters=counters, sequences=sequences)
-        )
+        min_length_mask = self.get_mask(counters=arities, sequences=sequences)
         # zero out all terminal node
         probs = tf.minimum(probs, min_length_mask)
 
@@ -77,62 +76,77 @@ class MinLengthConstraint(Constraint):
 
 class MaxLengthConstraint(Constraint):
     def __init__(self, sampler: "RNNSampler", max_length: int = 15):
-        super().__init__(sampler)
+        super().__init__()
         self.max_length = max_length
+        self.zero_arity_mask = tf.cast(
+            sampler.tokens.zero_arity_mask, dtype=TF_FLOAT_DTYPE
+        )
 
-    def get_mask(self, counters: tf.Tensor, sequences: tf.Tensor):
+    def get_mask(self, arities: tf.Tensor, sequences: tf.Tensor):
         lengths = sequences.shape[1]
         max_length_mask = tf.cast(
-            counters + lengths
-            <= tf.ones(counters.shape, dtype=TF_INT_DTYPE) * (self.max_length - 2),
+            arities + lengths
+            <= tf.ones(arities.shape, dtype=TF_INT_DTYPE) * (self.max_length - 2),
             dtype=TF_FLOAT_DTYPE,
         )[:, None]
         max_length_mask = tf.maximum(
-            tf.cast(self.sampler.tokens.zero_arity_mask, dtype=TF_FLOAT_DTYPE)[None, :],
+            # tf.cast(self.sampler.tokens.zero_arity_mask, dtype=TF_FLOAT_DTYPE)[None, :],
+            self.zero_arity_mask[None, :],
             max_length_mask,
         )
         return max_length_mask
 
-    def __call__(
+    def call(
         self,
         probs: tf.Tensor,
-        counters: tf.Tensor,
+        arities: tf.Tensor,
         sequences: tf.Tensor,
     ):
-        max_length_mask = self.get_mask(counters=counters, sequences=sequences)
-        max_length_mask = tf.stop_gradient(max_length_mask)
+        max_length_mask = self.get_mask(arities=arities, sequences=sequences)
         probs = tf.minimum(probs, max_length_mask)
 
         return probs
 
 
 class MinVariableExpression(Constraint):
-    def get_mask(self, counters: tf.Tensor, sequences: tf.Tensor):
-        lengths = sequences.shape[1]
-        # non zero arity or non variable
-        nonvar_zeroarity_mask = tf.cast(
+    def __init__(self, sampler: "RNNSampler"):
+        super().__init__()
+        self.nonvar_zeroarity_mask = tf.cast(
             ~tf.logical_and(
-                self.sampler.tokens.zero_arity_mask,
-                self.sampler.tokens.nonvariable_mask,
+                sampler.tokens.zero_arity_mask,
+                sampler.tokens.nonvariable_mask,
             ),
             dtype=TF_FLOAT_DTYPE,
         )
+        self.variable_tensor = sampler.tokens.variable_tensor
+
+    def get_mask(self, arities: tf.Tensor, sequences: tf.Tensor):
+        lengths = sequences.shape[1]
+        # non zero arity or non variable
+        # nonvar_zeroarity_mask = tf.cast(
+        #     ~tf.logical_and(
+        #         self.sampler.tokens.zero_arity_mask,
+        #         self.sampler.tokens.nonvariable_mask,
+        #     ),
+        #     dtype=TF_FLOAT_DTYPE,
+        # )
 
         if lengths == 0:
-            return nonvar_zeroarity_mask
+            return self.nonvar_zeroarity_mask
 
         else:
             nonvar_zeroarity_mask = tf.tile(
-                nonvar_zeroarity_mask[None, :], multiples=(counters.shape[0], 1)
+                self.nonvar_zeroarity_mask[None, :], multiples=(arities.shape[0], 1)
             )
-            counter_mask = counters == 1
+            counter_mask = arities == 1
 
             if sequences.ndim == 1:
                 sequences = sequences[:, None]
             contains_novar_mask = ~tf.reduce_any(
                 tf_isin(
                     sequences,
-                    self.sampler.tokens.variable_tensor
+                    self.variable_tensor
+                    # self.sampler.tokens.variable_tensor
                     # tf.cast(sampler.tokens.variable_tensor, dtype=TF_DTYPE)
                 ),
                 axis=1,
@@ -148,12 +162,12 @@ class MinVariableExpression(Constraint):
             )
             return nonvar_zeroarity_mask
 
-    def __call__(
+    def call(
         self,
         probs: tf.Tensor,
-        counters: tf.Tensor,
+        arities: tf.Tensor,
         sequences: tf.Tensor,
     ):
-        nonvar_zeroarity_mask = tf.stop_gradient(self.get_mask(counters, sequences))
+        nonvar_zeroarity_mask = self.get_mask(arities=arities, sequences=sequences)
         probs = tf.minimum(probs, nonvar_zeroarity_mask)
         return probs

@@ -10,15 +10,14 @@ from .functions import protected_div, protected_log
 class Token:
     symbol: str
     arity: float
-    tensorflow: Optional[Callable] = None
-    sympy: Optional[Callable] = None
+    tf_eval: Optional[Callable] = None
     variable: bool = False
 
     def __repr__(self):
         return self.symbol
 
 
-class TokenSequence(list[Token]):
+class TokenLibrary(list[Token]):
     def __init__(self, *iterable: Token):
         super().__init__(iterable)
         self._dict_map = {token.symbol: token for token in iterable}
@@ -106,7 +105,7 @@ class TokenSequence(list[Token]):
         return self.non_i_arity_tensor(2)
 
 
-BASE_TOKENS = TokenSequence(
+BASE_TOKENS = TokenLibrary(
     *[
         Token(char, 2, func)
         for char, func in zip("+-*/", (tf.add, tf.subtract, tf.multiply, protected_div))

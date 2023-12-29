@@ -14,7 +14,7 @@ from tensorflow.keras.models import Model
 from .constants import TF_FLOAT_DTYPE
 from .logger import getLogger
 from .rewards import rsquared
-from .tokens import BASE_TOKENS, Token, TokenSequence
+from .tokens import BASE_TOKENS, Token, TokenLibrary
 
 LOGGER = getLogger("Expression")
 
@@ -41,7 +41,7 @@ class Node:
         return cls(
             symbol=token.symbol,
             arity=token.arity,
-            operator=token.tensorflow,
+            operator=token.tf_eval,
             parent=parent,
             left_child=left_child,
             right_child=right_child,
@@ -50,7 +50,7 @@ class Node:
         )
 
     @classmethod
-    def from_sequence(cls, sequence, tokens: TokenSequence = BASE_TOKENS):
+    def from_sequence(cls, sequence, tokens: TokenLibrary = BASE_TOKENS):
         value = sequence[0]
         token = tokens[value]
         root = cls.from_token(token, parent=None)

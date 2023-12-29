@@ -11,7 +11,7 @@ logging.basicConfig(
 
 
 class KeywordsLogger:
-    def __init__(self, name: str, **kwargs):
+    def __init__(self, name: Optional[str] = None, **kwargs):
         self.name = name
         self.logger = logging.getLogger(name)
         self.kwargs = kwargs
@@ -35,7 +35,7 @@ class KeywordsLogger:
         log(self.logger, msg, "critical", **self.kwargs, **kwargs)
 
 
-def getLogger(name: str, **kwargs):
+def getLogger(name: Optional[str] = None, **kwargs):
     return KeywordsLogger(name, **kwargs)
 
 
@@ -53,7 +53,7 @@ def log(
             + "\n"
         )
     else:
-        keywords = ", ".join(["=".join(map(str, item)) for item in kwargs.items()])
+        keywords = ", ".join(["=".join(map(repr, item)) for item in kwargs.items()])
 
     if msg is not None:
         msg = f"{msg}, {keywords}"
