@@ -8,7 +8,7 @@ from tensorflow.keras.models import Model
 
 from .constants import TF_FLOAT_DTYPE
 from .expressions import ExpressionEnsemble, pandas_to_tensor
-from .logger import getLogger
+from .logger import TensorRepr, getLogger
 from .rewards import rsquared
 from .sampler import Sampler
 
@@ -34,6 +34,24 @@ class SymbolicRegressorOutput:
     def dtype(self):
         return TF_FLOAT_DTYPE
 
+    def __repr__(self):
+        name_and_tensors = [
+            (name, tensor)
+            for name, tensor in zip(
+                ("reward", "entropy", "log_prob"),
+                (self.rewards, self.entropies, self.log_probs),
+            )
+            if tensor is not None
+        ]
+        names, tensors = zip(*name_and_tensors)
+        inner_repr = "\n".join(
+            [
+                f"  {expr} {', '.join([f'{name}: {value:.1f}' for name, value in zip(names, values)])}"
+                for expr, *values in zip(self.expressions, *tensors)
+            ]
+        )
+        return f"<{self.__class__.__name__}\n{inner_repr}\n>"
+
 
 class SymbolicLoss:
     def __init__(
@@ -45,18 +63,10 @@ class SymbolicLoss:
         if score_func is None:
             score_func = rsquared
         self.score_func = score_func
-        self.logger = getLogger("SymbolicLoss")
+        self.logger = getLogger(object=self.__class__.__name__)
 
-    def __call__(
-        self,
-        y_true,
-        y_pred: tf.Tensor,
-        entropies: tf.Tensor,
-        log_probs: tf.Tensor,
-    ):
-        # predictions: SymbolicRegressorOutput):
-        # rewards = self.score_func(y_true, predictions.y)
-        rewards = self.score_func(y_true, y_pred)
+    def __call__(self, y_true: tf.Tensor, predictions: SymbolicRegressorOutput):
+        rewards = self.score_func(y_true, predictions.y)
         threshold = np.quantile(rewards, 1 - self.risk_seeking)
         mask = rewards > threshold
 
@@ -66,10 +76,8 @@ class SymbolicLoss:
 
         # select best rewards
         best_rewards = rewards[mask]
-        # best_entropies = predictions.entropies[mask]
-        # best_log_probs = predictions.log_probs[mask]
-        best_entropies = entropies[mask]
-        best_log_probs = log_probs[mask]
+        best_entropies = predictions.entropies[mask]
+        best_log_probs = predictions.log_probs[mask]
         risk_seeking_loss = tf.clip_by_value(
             tf.reduce_sum((best_rewards - threshold) * best_log_probs)
             / best_rewards.shape[0],
@@ -91,42 +99,43 @@ class SymbolicRegressor(Model):
     def __init__(
         self,
         sampler: Sampler,
-        loss_func: SymbolicLoss,
+        loss_func: Optional[SymbolicLoss] = None,
         n_samples: int = 32,
     ):
         super().__init__()
         self.sampler = sampler
         self.n_samples = n_samples
+        if loss_func:
+            loss_func = SymbolicLoss()
         self.loss_func = loss_func
         self.build(tf.TensorShape(None))
 
     def call(self, inputs: SymbolicRegressorInputs, training=None, mask=None):
         X = inputs["X"]
-        y = inputs["y"]
+        # y = inputs["y"]
         (
             sequences,
             lengths,
-            log_probs,
             entropies,
+            log_probs,
         ) = self.sampler.sample(self.n_samples)
         ensemble = ExpressionEnsemble(sequences, lengths)
         # ensemble.optimize_constants(X=X, y=y)
 
-        return ensemble.eval(X), entropies, log_probs
-        # return SymbolicRegressorOutput(
-        #     expressions=ensemble,
-        #     y=ensemble.eval(X),
-        #     entropies=entropies,
-        #     log_probs=log_probs,
-        # )
+        return SymbolicRegressorOutput(
+            expressions=ensemble,
+            y=ensemble.eval(X),
+            entropies=entropies,
+            log_probs=log_probs,
+        )
 
     def fit(self, x=None, y=None, **kwargs):
         x = pandas_to_tensor(x)
         y = pandas_to_tensor(y)
         inputs = {"X": x, "y": y}
         with tf.GradientTape() as tape:
-            y_pred, entropies, log_probs = self(inputs)
-            loss = self.loss_func(y, y_pred, entropies, log_probs)
+            predictions = self(inputs)
+            loss = self.loss_func(y, predictions)
 
         grads = tape.gradient(loss, self.sampler.trainable_variables)
         return grads

@@ -4,6 +4,7 @@ from typing import Callable, Optional
 import tensorflow as tf
 
 from .functions import protected_div, protected_log
+from .logger import getLogger
 
 
 @dataclass
@@ -21,6 +22,7 @@ class TokenLibrary(list[Token]):
     def __init__(self, *iterable: Token):
         super().__init__(iterable)
         self._dict_map = {token.symbol: token for token in iterable}
+        self.logger = getLogger(object=self.__class__.__name__)
 
     def __getitem__(self, item: int | slice | str):
         if isinstance(item, str):

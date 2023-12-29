@@ -313,6 +313,7 @@ class Expression(Model):
             np.random.randn(self.n_const) * 4 - 2, dtype=TF_FLOAT_DTYPE, trainable=True
         )
         self.build(tf.TensorShape(None))
+        self.logger = getLogger(object=self.__class__.__name__)
 
     def call(self, inputs: ExpressionInputs, training: Any = None, mask: Any = None):
         X = inputs["X"]
@@ -392,6 +393,9 @@ class Expression(Model):
         y = pandas_to_tensor(y)
         return reward_func(y, y_pred)
 
+    def __repr__(self):
+        return f"<{self.__class__.__name__[:4]}: {self.tree.__repr__()}>"
+
 
 class ExpressionEnsemble(list[Expression]):
     def __init__(
@@ -404,7 +408,7 @@ class ExpressionEnsemble(list[Expression]):
             for sequence, length in zip(sequences, lengths)
         ]
         super().__init__(list_of_expressions)
-        self.logger = LOGGER.bind(object="ExpressionEnsemble")
+        self.logger = getLogger(object=self.__class__.__name__)
 
     def eval(self, X: pd.DataFrame):
         """Returns the evaluation of all the expressions (n_expression, n_point)"""

@@ -1,3 +1,4 @@
+from collections import namedtuple
 from typing import Literal, TypedDict
 
 import tensorflow as tf
@@ -34,13 +35,13 @@ def sample_token_distribution(
     state: tf.Tensor,
     arities: tf.Tensor,
     sequences: tf.Tensor,
-) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor]:
-    probs = sampler(
-        {"input": inputs, "hidden": state, "arities": arities, "sequences": sequences}
+) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
+    probs, state = sampler(
+        {"input": inputs, "state": state, "arities": arities, "sequences": sequences}
     )
     dist = tfp.distributions.Categorical(probs=probs)
     tokens = dist.sample()
-    return tokens, dist.log_prob(tokens), dist.entropy()
+    return tokens, dist.log_prob(tokens), dist.entropy(), state
 
 
 def update_arity(
@@ -106,7 +107,10 @@ def get_parent_sibling(token_library: TokenLibrary, sequences: tf.Tensor):
     return parent_sibling
 
 
-def get_next_input(token_library: TokenLibrary, parent_sibling: tf.Tensor):
+def get_next_input(token_library: TokenLibrary, sequences: tf.Tensor):
+    parent_sibling = get_parent_sibling(
+        token_library=token_library, sequences=sequences
+    )
     parent, sibling = parent_sibling[:, 0], parent_sibling[:, 1]
     return tf.concat(
         [
@@ -119,15 +123,31 @@ def get_next_input(token_library: TokenLibrary, parent_sibling: tf.Tensor):
 
 class RNNSamplerInput(TypedDict):
     input: tf.Tensor
-    hidden: tf.Tensor
+    state: tf.Tensor
     arities: tf.Tensor
     sequences: tf.Tensor
+
+
+RNNSamplerLoopState = namedtuple(
+    "RNNSamplerLoopState",
+    [
+        "iteration",
+        "inputs",
+        "current_state",
+        "current_arities",
+        "sequences",
+        "still_incomplete",
+        "mask",
+        "entropies",
+        "log_probs",
+    ],
+)
 
 
 class RNNSampler(Sampler):
     def __init__(
         self,
-        tokens: TokenLibrary,
+        token_library: TokenLibrary,
         hidden_size: int,
         num_layers: int = 1,
         type: Literal["rnn"] = "rnn",
@@ -136,14 +156,14 @@ class RNNSampler(Sampler):
         max_length: int = 15,
     ):
         super().__init__()
-        self.logger = getLogger(object="RNNSampler")
+        self.logger = getLogger(object=self.__class__.__name__)
 
-        self.input_size = 2 * len(tokens)
-        self.output_size = len(tokens)
+        self.input_size = 2 * len(token_library)
+        self.output_size = len(token_library)
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.dropout = dropout
-        self.tokens = tokens
+        self.token_library = token_library
         self.type = type
         self.constraints: list[Constraint] = [
             MinLengthConstraint(self, min_length=min_length),
@@ -179,18 +199,22 @@ class RNNSampler(Sampler):
             )
 
         # build model
-        n = 32
+        n = 1
         init: RNNSamplerInput = {
             "input": tf.tile(self.inputs, (n, 1)),
-            "hidden": tf.tile(self.initial_state, (n, 1)),
+            "state": tf.tile(self.initial_state, (n, 1)),
             "arities": tf.ones(n, dtype=TF_INT_DTYPE),
             "sequences": tf.zeros((n, 0), dtype=TF_INT_DTYPE),
         }
+        self.logger.debug("Initial call")
         self(init)
 
-    def call(self, inputs: RNNSamplerInput, training=None, mask=None):
+    def call(
+        self, inputs: RNNSamplerInput, training=None, mask=None
+    ) -> tuple[tf.Tensor, tf.Tensor]:
+        """Returns"""
         output = inputs["input"]
-        state = inputs["hidden"]
+        state = inputs["state"]
         arities = inputs["arities"]
         sequences = inputs["sequences"]
         logger = self.logger.bind(func="call")
@@ -208,118 +232,93 @@ class RNNSampler(Sampler):
         probs = non_zero_probs(probs)
         probs = normalize(probs)
         logger.debug("After normalization", probs=probs)
-        return probs
+        return probs, state
 
     def sample(self, n: int):
-        sequences = tf.zeros((n, 0), dtype=TF_INT_DTYPE)
-        mask = tf.zeros((n, 0), dtype=tf.bool)
-        entropies = tf.zeros((n, 0), dtype=TF_FLOAT_DTYPE)
-        log_probs = tf.zeros((n, 0), dtype=TF_FLOAT_DTYPE)
-
-        inputs = tf.tile(self.inputs, (n, 1))
-        current_state = tf.tile(self.initial_state, (n, 1))
-
-        current_arities = tf.ones(n, dtype=TF_INT_DTYPE)
-        still_incomplete = tf.ones(n, dtype=tf.bool)
-
-        def body(
-            inputs,
-            current_state,
-            current_arities,
-            sequences,
-            still_incomplete,
-            mask,
-            entropies,
-            log_probs,
-        ):
-            tokens, log_prob, entropy = sample_token_distribution(
+        # TODO look into TensorArray instead of tf_append ?
+        def body(loop_state: RNNSamplerLoopState) -> tuple[RNNSamplerLoopState]:
+            self.logger.debug(f"Sampling token iteration {loop_state.iteration}")
+            tokens, log_prob, entropy, current_state = sample_token_distribution(
                 sampler=self,
-                inputs=inputs,
-                state=current_state,
-                arities=current_arities,
-                sequences=sequences,
+                inputs=loop_state.inputs,
+                state=loop_state.current_state,
+                arities=loop_state.current_arities,
+                sequences=loop_state.sequences,
             )
 
             # Append tokens to current sequence and update arities
-            sequences = tf_append(sequences, tokens)
+            sequences = tf_append(loop_state.sequences, tokens)
             current_arities = update_arity(
-                current_arity=current_arities, tokens=tokens, token_library=self.tokens
+                current_arity=loop_state.current_arities,
+                tokens=tokens,
+                token_library=self.token_library,
             )
             # entropies and log_prob are stored for loss computation
-            entropies = tf_append(entropies, entropy)
-            log_probs = tf_append(log_probs, log_prob)
+            entropies = tf_append(loop_state.entropies, entropy)
+            log_probs = tf_append(loop_state.log_probs, log_prob)
 
             # Sequences are complete when arities reaches 0
-            still_incomplete = tf.logical_and(current_arities > 0, still_incomplete)
-            mask = tf_append(mask, still_incomplete)
-
-            parent_sibling = get_parent_sibling(
-                token_library=self.tokens, sequences=sequences
+            still_incomplete = tf.logical_and(
+                current_arities > 0, loop_state.still_incomplete
             )
+            mask = tf_append(loop_state.mask, still_incomplete)
+
             inputs = get_next_input(
-                token_library=self.tokens, parent_sibling=parent_sibling
+                token_library=self.token_library, sequences=sequences
             )
 
             return (
-                inputs,
-                current_state,
-                current_arities,
-                sequences,
-                still_incomplete,
-                mask,
-                entropies,
-                log_probs,
+                RNNSamplerLoopState(
+                    iteration=loop_state.iteration + 1,
+                    inputs=inputs,
+                    current_state=current_state,
+                    current_arities=current_arities,
+                    sequences=sequences,
+                    still_incomplete=still_incomplete,
+                    mask=mask,
+                    entropies=entropies,
+                    log_probs=log_probs,
+                ),
             )
 
-        def cond(
-            inputs,
-            current_state,
-            current_arities,
-            sequences,
-            still_incomplete,
-            mask,
-            entropies,
-            log_probs,
-        ):
-            return tf.reduce_any(still_incomplete)
+        def cond(loop_state: RNNSamplerLoopState):
+            return tf.reduce_any(loop_state.still_incomplete)
 
-        (
-            inputs,
-            current_state,
-            current_arities,
-            sequences,
-            still_incomplete,
-            mask,
-            entropies,
-            log_probs,
-        ) = tf.while_loop(
-            cond=cond,
-            body=body,
-            loop_vars=[
-                inputs,
-                current_state,
-                current_arities,
-                sequences,
-                still_incomplete,
-                mask,
-                entropies,
-                log_probs,
-            ],
-            shape_invariants=[
-                inputs.get_shape(),
-                current_state.get_shape(),
-                current_arities.get_shape(),
-                tf.TensorShape((n, None)),
-                still_incomplete.get_shape(),
-                tf.TensorShape((n, None)),
-                tf.TensorShape((n, None)),
-                tf.TensorShape((n, None)),
-            ],
+        loop_state = RNNSamplerLoopState(
+            iteration=0,
+            inputs=tf.tile(self.inputs, (n, 1)),
+            current_state=tf.tile(self.initial_state, (n, 1)),
+            current_arities=tf.ones(n, dtype=TF_INT_DTYPE),
+            still_incomplete=tf.ones(n, dtype=tf.bool),
+            sequences=tf.zeros((n, 0), dtype=TF_INT_DTYPE),
+            mask=tf.zeros((n, 0), dtype=tf.bool),
+            entropies=tf.zeros((n, 0), dtype=TF_FLOAT_DTYPE),
+            log_probs=tf.zeros((n, 0), dtype=TF_FLOAT_DTYPE),
         )
 
-        lengths = tf.reduce_sum(tf.cast(mask, dtype=TF_INT_DTYPE), axis=-1) + 1
-        mask_float = tf.cast(mask, dtype=TF_FLOAT_DTYPE)
+        # Note : the tf.while_loop using namedtuple is tricky
+        # loop_vars gets an iterable and is expanded in the cond and body function
+        # using a tuple of namedtuple is a way of getting a simple namedtuple as argument
+        # of both body and cond function.
+        # It also seems to avoid the problem with shape_invariant.
+        (loop_state,) = tf.while_loop(cond=cond, body=body, loop_vars=(loop_state,))
+        # Just in case, shape invariants
+        # shape_invariants=RNNSamplerLoopState(
+        #     inputs=initial_loop_state.inputs.get_shape(),
+        #     current_state=initial_loop_state.current_state.get_shape(),
+        #     current_arities=initial_loop_state.current_arities.get_shape(),
+        #     sequences=tf.TensorShape((n, None)),
+        #     still_incomplete=initial_loop_state.still_incomplete.get_shape(),
+        #     mask=tf.TensorShape((n, None)),
+        #     entropies=tf.TensorShape((n, None)),
+        #     log_probs=tf.TensorShape((n, None)),
+        # )
 
-        entropies = tf.reduce_sum(entropies * mask_float, axis=-1)
-        log_probs = tf.reduce_sum(log_probs * mask_float, axis=-1)
-        return sequences, lengths, entropies, log_probs
+        lengths = (
+            tf.reduce_sum(tf.cast(loop_state.mask, dtype=TF_INT_DTYPE), axis=-1) + 1
+        )
+        mask_float = tf.cast(loop_state.mask, dtype=TF_FLOAT_DTYPE)
+
+        entropies = tf.reduce_sum(loop_state.entropies * mask_float, axis=-1)
+        log_probs = tf.reduce_sum(loop_state.log_probs * mask_float, axis=-1)
+        return loop_state.sequences, lengths, entropies, log_probs

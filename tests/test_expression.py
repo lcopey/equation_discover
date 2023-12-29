@@ -3,25 +3,6 @@ import unittest
 from equation_discover import *
 
 
-class TestExpressionEnsemble(unittest.TestCase):
-    def setUp(self):
-        n_samples = 32
-        sampler = RNNSampler(BASE_TOKENS, 16, 2)
-        (sequences, lengths, entropies, log_probs) = sampler.sample(n_samples)
-        self.sequences = sequences
-        self.lengths = lengths
-
-    def test_build_tree(self):
-        ensemble = ExpressionEnsemble(self.sequences, self.lengths)
-        self.assertIsNotNone(ensemble)
-
-    def test_eval(self):
-        ensemble = ExpressionEnsemble(self.sequences, self.lengths)
-        X = pd.DataFrame(np.linspace(-2 * np.pi, 2 * np.pi), columns=["var_x"])
-        results = ensemble.eval(X)
-        self.assertEqual(results.shape, (self.sequences.shape[0], X.shape[0]))
-
-
 class TestExpression(unittest.TestCase):
     def setUp(self):
         self.sequence = [
@@ -55,3 +36,22 @@ class TestExpression(unittest.TestCase):
             expression = Expression(tree)
             expression.optimize_constants(self.X, self.y, mode="basinhopping")
             self.assertIsNotNone(expression.res_)
+
+
+class TestExpressionEnsemble(unittest.TestCase):
+    def setUp(self):
+        n_samples = 32
+        sampler = RNNSampler(BASE_TOKENS, 16, 2)
+        (sequences, lengths, entropies, log_probs) = sampler.sample(n_samples)
+        self.sequences = sequences
+        self.lengths = lengths
+
+    def test_build_tree(self):
+        ensemble = ExpressionEnsemble(self.sequences, self.lengths)
+        self.assertIsNotNone(ensemble)
+
+    def test_eval(self):
+        ensemble = ExpressionEnsemble(self.sequences, self.lengths)
+        X = pd.DataFrame(np.linspace(-2 * np.pi, 2 * np.pi), columns=["var_x"])
+        results = ensemble.eval(X)
+        self.assertEqual(results.shape, (self.sequences.shape[0], X.shape[0]))

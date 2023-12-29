@@ -34,7 +34,7 @@ class MinLengthConstraint(Constraint):
     def __init__(self, sampler: "RNNSampler", min_length: int = 2):
         super().__init__()
         self.min_length = min_length
-        self.non_zero_arity_mask = sampler.tokens.non_zero_arity_mask
+        self.non_zero_arity_mask = sampler.token_library.non_zero_arity_mask
 
     def get_mask(self, counters: tf.Tensor, sequences: tf.Tensor):
         lengths = sequences.shape[1]
@@ -79,7 +79,7 @@ class MaxLengthConstraint(Constraint):
         super().__init__()
         self.max_length = max_length
         self.zero_arity_mask = tf.cast(
-            sampler.tokens.zero_arity_mask, dtype=TF_FLOAT_DTYPE
+            sampler.token_library.zero_arity_mask, dtype=TF_FLOAT_DTYPE
         )
 
     def get_mask(self, arities: tf.Tensor, sequences: tf.Tensor):
@@ -113,12 +113,12 @@ class MinVariableExpression(Constraint):
         super().__init__()
         self.nonvar_zeroarity_mask = tf.cast(
             ~tf.logical_and(
-                sampler.tokens.zero_arity_mask,
-                sampler.tokens.nonvariable_mask,
+                sampler.token_library.zero_arity_mask,
+                sampler.token_library.nonvariable_mask,
             ),
             dtype=TF_FLOAT_DTYPE,
         )
-        self.variable_tensor = sampler.tokens.variable_tensor
+        self.variable_tensor = sampler.token_library.variable_tensor
 
     def get_mask(self, arities: tf.Tensor, sequences: tf.Tensor):
         lengths = sequences.shape[1]
