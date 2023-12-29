@@ -1,3 +1,4 @@
+"""Protected function to evaluate expression"""
 import tensorflow as tf
 
 

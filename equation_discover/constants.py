@@ -1,3 +1,5 @@
+"""Module containing main constants of the library"""
+
 import numpy as np
 import tensorflow as tf
 

@@ -1,3 +1,4 @@
+"""Logger module"""
 import logging
 from typing import Any, Literal, Optional
 

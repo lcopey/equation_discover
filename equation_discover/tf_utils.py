@@ -1,3 +1,4 @@
+"""Some utilisies to work with tensorflow"""
 import tensorflow as tf
 
 

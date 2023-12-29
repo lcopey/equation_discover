@@ -1,3 +1,4 @@
+"""Module containing SymbolicRegressor."""
 from dataclasses import dataclass
 from typing import Callable, Optional, TypedDict
 
@@ -26,13 +27,13 @@ class SymbolicRegressorOutput:
     entropies: Optional[tf.Tensor] = None
     log_probs: Optional[tf.Tensor] = None
 
-    @property
-    def shape(self):
-        return tf.TensorShape(len(self.expressions))
-
-    @property
-    def dtype(self):
-        return TF_FLOAT_DTYPE
+    # @property
+    # def shape(self):
+    #     return tf.TensorShape(len(self.expressions))
+    #
+    # @property
+    # def dtype(self):
+    #     return TF_FLOAT_DTYPE
 
     def __repr__(self):
         name_and_tensors = [

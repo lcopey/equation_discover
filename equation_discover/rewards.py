@@ -1,3 +1,4 @@
+"""Module containing losses used in conjunction with SymbolicLoss"""
 import tensorflow as tf
 from tensorflow.keras.metrics import MSE
 

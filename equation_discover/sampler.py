@@ -1,3 +1,4 @@
+"""Model for sampling token and expressions."""
 from collections import namedtuple
 from typing import Literal, TypedDict
 

@@ -1,3 +1,4 @@
+"""Module containing main constraint to apply in-situ on the token probabilities."""
 from functools import wraps
 from typing import TYPE_CHECKING
 

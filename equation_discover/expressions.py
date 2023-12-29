@@ -1,3 +1,4 @@
+"""Module containing code decicated to evaluate expression from sequence of token."""
 from dataclasses import dataclass
 from functools import wraps
 from typing import (Any, Callable, Iterable, Literal, Optional, TypedDict,
