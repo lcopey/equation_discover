@@ -4,7 +4,7 @@ from typing import Callable, Optional
 
 import tensorflow as tf
 
-from .functions import protected_div, protected_log
+from .functions import protected_div, protected_exp, protected_log
 from .logger import getLogger
 
 
@@ -119,7 +119,7 @@ BASE_TOKENS.extend(
     [
         Token(symbol, 1, func)
         for symbol, func in zip(
-            ("sin", "cos", "exp", "log"), (tf.sin, tf.cos, tf.exp, protected_log)
+            ("sin", "cos", "exp", "log"), (tf.sin, tf.cos, protected_exp, protected_log)
         )
     ]
 )

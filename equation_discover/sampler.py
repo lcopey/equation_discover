@@ -9,9 +9,14 @@ from tensorflow.keras.models import Model
 
 from .constants import TF_FLOAT_DTYPE, TF_INT_DTYPE
 from .logger import getLogger
-from .probabilities import (Constraint, MaxLengthConstraint,
-                            MinLengthConstraint, MinVariableExpression,
-                            non_zero_probs, normalize)
+from .probabilities import (
+    Constraint,
+    MaxLengthConstraint,
+    MinLengthConstraint,
+    MinVariableExpression,
+    non_zero_probs,
+    normalize,
+)
 from .tf_utils import tf_append, tf_isin, tf_vstack
 from .tokens import TokenLibrary
 

@@ -4,8 +4,13 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from equation_discover import (BASE_TOKENS, RNNSampler, SymbolicLoss,
-                               SymbolicRegressor, pandas_to_tensor)
+from equation_discover import (
+    BASE_TOKENS,
+    RNNSampler,
+    SymbolicLoss,
+    SymbolicRegressor,
+    pandas_to_tensor,
+)
 
 
 class TestSymbolicRegressor(unittest.TestCase):
